@@ -1,0 +1,40 @@
+# Doxygen configuration for map-pose-former's Python API.
+#
+# Deliberately short. A `doxygen -g` default is two thousand lines of settings
+# nobody has read, and every one of them then looks deliberate. Only the
+# settings that differ from the default are here, so each line is a decision.
+#
+# Run through scripts/docs.sh, which checks the tool is installed and puts the
+# output where .gitignore already excludes it.
+
+PROJECT_NAME           = map-pose-former
+PROJECT_BRIEF          = "Transformer map-matching localization"
+OUTPUT_DIRECTORY       = build/doxygen
+
+# The library only. tools/ are command-line entry points documented by their
+# --help and by README.md; tests/ document themselves by being read.
+INPUT                  = mapposeformer docs/doxygen/ApiMainPage.md
+USE_MDFILE_AS_MAINPAGE = docs/doxygen/ApiMainPage.md
+FILE_PATTERNS          = *.py *.md
+RECURSIVE              = YES
+
+# Python. OPTIMIZE_OUTPUT_JAVA is Doxygen's name for the Java/Python/C# family:
+# it drops the C++ notions -- headers, free functions in a global namespace --
+# that would otherwise shape every page.
+OPTIMIZE_OUTPUT_JAVA   = YES
+
+# The first sentence of a docstring is the brief, so no @brief is written by
+# hand. Same setting, same reason, as camera-map-localization's Doxyfile: the
+# two projects should read alike.
+JAVADOC_AUTOBRIEF      = YES
+
+# Documented entities only. EXTRACT_ALL = YES would fill the output with the
+# undocumented private helpers and make an empty page look like a written one.
+EXTRACT_ALL            = NO
+EXTRACT_STATIC         = NO
+
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_TREEVIEW      = YES
+QUIET                  = YES
+WARN_IF_UNDOCUMENTED   = NO
