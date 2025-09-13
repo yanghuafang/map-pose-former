@@ -1,0 +1,17 @@
+# The distillation teacher: wider, deeper, and given more of the map to look at.
+# Not meant for deployment -- meant to be the thing the student is compressed
+# towards. See docs/ROADMAP.md.
+data:
+  num_scenes: {train: 2000, val: 60, test: 120}
+model:
+  dim: 256
+  num_layers: 8
+  num_heads: 8
+  ffn_mult: 4
+train:
+  epochs: 60
+  batch_size: 48
+  lr: 2.0e-4
+  num_workers: 10
+  amp: bf16
+  out_dir: runs/teacher

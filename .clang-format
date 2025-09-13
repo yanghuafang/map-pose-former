@@ -1,0 +1,44 @@
+# Google C++ style. There is no C++ here yet -- it arrives with the TensorRT
+# backend at M5 (docs/ROADMAP.md), which plugs into camera-map-localization's
+# engine as an alternative to its PoseSampler.
+#
+# Written in advance on purpose. That backend has to compile into the other
+# project's tree and be read alongside its sources, so the two must agree on
+# layout before the first file exists rather than after a reformatting diff.
+# These settings are camera-map-localization's, restated rather than inherited.
+
+BasedOnStyle: Google
+IndentWidth: 2
+ColumnLimit: 80
+Standard: c++17
+
+# Pointers and references bind to the type: `uint8_t* p`, `const Mat44& T`.
+# Stated rather than inherited because the Google default moved in LLVM 21 --
+# through LLVM 20 it set DerivePointerAlignment: true, which copies whichever
+# spelling a file already uses and lets both pass a --check. Setting all three
+# makes the rule the same on either side of that gap, which matters when CI
+# runs a distro clang-format and a developer runs Homebrew's.
+DerivePointerAlignment: false
+PointerAlignment: Left
+ReferenceAlignment: Pointer
+
+# Include order, exactly as the Google C++ Style Guide states it. Priority 0 is
+# clang-format's own slot for the related header, so these start at 1:
+#
+#   0. the related header       (automatic)
+#   1. C system headers
+#   2. C++ standard library
+#   3. other libraries          <NvInfer.h>, <cuda_runtime.h>
+#   4. this project             "mpf/..."
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex:    '^<(assert|ctype|errno|fcntl|float|inttypes|limits|locale|math|setjmp|signal|stdarg|stddef|stdint|stdio|stdlib|string|termios|time|unistd|wchar|wctype)\.h>'
+    Priority: 1
+  - Regex:    '^<sys/[a-z_]+\.h>'
+    Priority: 1
+  - Regex:    '^<[a-z0-9_]+>'
+    Priority: 2
+  - Regex:    '^<.*>'
+    Priority: 3
+  - Regex:    '^".*"'
+    Priority: 4

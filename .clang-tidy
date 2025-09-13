@@ -1,0 +1,49 @@
+# clang-tidy for the C++ that arrives at M5 (docs/ROADMAP.md). None exists yet.
+#
+# Layout is .clang-format's job and no check here substitutes for it: brace
+# placement, pointer spelling, indent width, column limit and include order are
+# all settings there, and a rule missing from that file is unenforced whatever
+# appears below. What is left for this file is the half clang-format cannot
+# see -- what things are named, and which constructs the style guide rules out.
+#
+# The list is curated rather than a wildcard, for the reason
+# camera-map-localization gives at length in its own .clang-tidy: a
+# bugprone-/modernize-/readability- wildcard reports mostly index arithmetic
+# and sensor constants read as defects. Start narrow and add with a reason.
+
+Checks: >
+  -*,
+  google-*,
+  bugprone-*,
+  performance-*,
+  cppcoreguidelines-virtual-class-destructor,
+  readability-identifier-naming,
+  -google-readability-todo,
+  -bugprone-easily-swappable-parameters
+
+HeaderFilterRegex: '(include|src)/mpf/.*\.h$'
+WarningsAsErrors: ''
+
+CheckOptions:
+  # The Google C++ Style Guide's naming section, spelled out so it is checked
+  # rather than remembered.
+  - key:   readability-identifier-naming.NamespaceCase
+    value: lower_case
+  - key:   readability-identifier-naming.ClassCase
+    value: CamelCase
+  - key:   readability-identifier-naming.StructCase
+    value: CamelCase
+  - key:   readability-identifier-naming.FunctionCase
+    value: CamelCase
+  - key:   readability-identifier-naming.VariableCase
+    value: lower_case
+  - key:   readability-identifier-naming.PrivateMemberSuffix
+    value: _
+  - key:   readability-identifier-naming.ConstantCase
+    value: CamelCase
+  - key:   readability-identifier-naming.ConstantPrefix
+    value: k
+  - key:   readability-identifier-naming.EnumConstantCase
+    value: CamelCase
+  - key:   readability-identifier-naming.EnumConstantPrefix
+    value: k

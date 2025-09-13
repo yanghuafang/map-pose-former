@@ -1,0 +1,18 @@
+# Smallest useful run: a few hundred steps on CPU, minutes not hours.
+# Used by scripts/run_smoke.sh and by CI. Not expected to localize well --
+# expected to prove that every part of the loop is connected.
+data:
+  num_scenes: {train: 24, val: 8, test: 8}
+  frame_stride: 8
+model:
+  dim: 64
+  num_layers: 2
+  num_heads: 4
+train:
+  epochs: 2
+  batch_size: 16
+  num_workers: 2
+  device: cpu
+  amp: "off"
+  log_every: 10
+  out_dir: runs/smoke

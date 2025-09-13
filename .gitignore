@@ -1,0 +1,119 @@
+# Everything here is regenerable. If a file can be produced by running
+# something in this repository, it does not belong in it -- and the two
+# exceptions are marked, because a reader should not have to guess why an
+# artefact was checked in.
+
+# --- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+/build/
+/dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# --- Environments -----------------------------------------------------------
+# A conda environment lives outside the tree (scripts/setup.sh makes a named
+# one). These cover the places a reader might still put one inside it.
+env/
+venv/
+/env/
+ENV/
+.conda/
+.python-version
+
+# --- Tool caches ------------------------------------------------------------
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.cache/
+.ipynb_checkpoints/
+*.cover
+.coverage
+.coverage.*
+htmlcov/
+
+# --- Runs, checkpoints, logs ------------------------------------------------
+# tools/train.py writes everything about a run under out_dir, TensorBoard
+# included, so one rule covers the lot.
+/runs/
+/logs/
+*.log
+lightning_logs/
+wandb/
+mlruns/
+events.out.tfevents.*
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.npz
+
+# --- Deployment artefacts ---------------------------------------------------
+# ONNX graphs, TensorRT engines and their INT8 calibration tables. An engine is
+# built for one GPU, one driver and one TensorRT version, so committing it
+# would ship something that works on exactly one machine.
+*.onnx
+*.engine
+*.plan
+*.trt
+*.calib
+calibration.cache
+.nv/
+
+# --- Datasets ---------------------------------------------------------------
+# scripts/lib.sh puts these on the data drive, outside the checkout, precisely
+# so `remote-ubuntu.sh --sync` cannot delete them. Named anyway, for the reader
+# who overrides MPF_DATA_ROOT to somewhere convenient and regrets it.
+#
+# Anchored with a leading slash, and that is not decoration: an unanchored
+# `data/` matches at *every* level, so it swallowed mapposeformer/data/ -- the
+# package. Already-tracked files stayed tracked, so git looked fine, and ruff
+# (which honours .gitignore) silently skipped five files including one with an
+# 86-column import. Every directory below names a real path from the root.
+/data/
+/datasets/
+*.tar
+*.tgz
+*.tar.gz
+*.zip
+
+# --- Editors and IDEs -------------------------------------------------------
+# .claude/settings.local.json is one developer's tool permissions, not the
+# project's; a shared .claude/settings.json would be, and is not ignored.
+.claude/settings.local.json
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+.\#*
+\#*\#
+
+# --- Operating systems ------------------------------------------------------
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# --- Scratch ----------------------------------------------------------------
+/tmp/
+*.tmp
+*.bak
+*.orig
+*.rej
+
+# --- The exceptions ---------------------------------------------------------
+# tools/viz_sample.py and tools/viz_volume.py write SVGs anywhere, so they are
+# ignored by default -- but the figures the documentation links to are checked
+# in, because a README whose images are missing is worse than one with none.
+*.svg
+!docs/img/*.svg

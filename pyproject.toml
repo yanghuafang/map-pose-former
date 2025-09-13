@@ -1,0 +1,22 @@
+[project]
+name = "mapposeformer"
+version = "0.1.0"
+description = "Transformer map-matching localization: train, compress, deploy"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+include = ["mapposeformer*"]
+
+[tool.ruff]
+line-length = 92
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+  "E731",  # a lambda is the clearest way to write the block table in model.py
+  "B008",  # dataclass field(default_factory=...) reads as a call in a default
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

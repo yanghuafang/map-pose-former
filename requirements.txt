@@ -1,0 +1,5 @@
+# torch is installed separately by scripts/setup.sh, because the wheel index
+# differs between CPU and CUDA and pinning it here would pick the wrong one.
+pyyaml>=6.0
+tensorboard>=2.16
+pytest>=8.0

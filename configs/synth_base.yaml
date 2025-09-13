@@ -1,0 +1,19 @@
+# The reference student: ~3.4M parameters, one RTX A6000, a couple of hours.
+# Everything not listed here is the dataclass default -- see
+# mapposeformer/config.py and the params dataclasses it composes.
+data:
+  num_scenes: {train: 800, val: 60, test: 120}
+model:
+  dim: 128
+  num_layers: 4
+  num_heads: 4
+train:
+  epochs: 40
+  batch_size: 64
+  lr: 3.0e-4
+  num_workers: 16
+  # The box has 20 logical cores and the loader is the limit: 8 workers
+  # gave 294 frames/s against the model's 675. Measured with tools/bench.py;
+  # 20 workers is slower than 16, which is contention, not headroom.
+  amp: bf16
+  out_dir: runs/base

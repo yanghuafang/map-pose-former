@@ -1,0 +1,17 @@
+# The experiment in mapposeformer/data/classes.py, as a config.
+#
+# Keep only the classes that run *parallel* to the road: lane dividers and road
+# boundaries. Longitudinal error should grow sharply while lateral error and
+# heading barely move -- because sliding a hypothesis along a lane line costs
+# nothing. If it does not, either the model is cheating or the data is leaking.
+data:
+  num_scenes: {train: 800, val: 60, test: 120}
+  sample:
+    keep_classes: [0, 1]
+model:
+  dim: 128
+  num_layers: 4
+train:
+  epochs: 40
+  batch_size: 64
+  out_dir: runs/ablate_lane_only
