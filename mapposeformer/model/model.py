@@ -126,7 +126,9 @@ class MapPoseFormer(nn.Module):
         map_xy = batch["map_pts"].flatten(1, 2)
         delta_match, mass = self.procrustes(assign, det_xy, map_xy)
 
-        out = self.volume(torch.cat([d, m], dim=1), torch.cat([dpad, mpad], dim=1))
+        out = self.volume(
+            assign, det_xy, map_xy, torch.cat([d, m], 1), torch.cat([dpad, mpad], 1)
+        )
         out["delta_volume"] = out.pop("delta")
         out["assign"] = assign
         out["scores"] = scores

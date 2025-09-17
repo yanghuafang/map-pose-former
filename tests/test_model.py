@@ -9,7 +9,7 @@ from mapposeformer.data import DataParams, SyntheticDataset
 from mapposeformer.losses import LossParams, compute_losses
 from mapposeformer.model import MapPoseFormer, ModelParams, weighted_procrustes_se2
 from mapposeformer.model.pose_head import ProcrustesPoseHead
-from mapposeformer.model.volume_head import GridParams, VolumeHead
+from mapposeformer.model.volume_head import GridParams, VolumeHead, grid_cost
 
 
 def _batch(n: int = 4) -> dict[str, torch.Tensor]:
@@ -172,7 +172,67 @@ def test_geometry_heads_ignore_autocast():
     # remainder is the bf16 logits, and it belongs there.
     volume = VolumeHead(64, 4, GridParams())
     tokens, pad = torch.randn(2, 32, 64), torch.zeros(2, 32, dtype=torch.bool)
+    assign = torch.rand(2, 24, 64)
     with torch.no_grad(), torch.autocast(device_type="cpu", dtype=torch.bfloat16):
-        out = volume(tokens, pad)
+        out = volume(assign, det_pts, map_pts, tokens, pad)
     for key in ("delta", "cov"):
         assert out[key].dtype is torch.float32, f"{key} came back {out[key].dtype}"
+
+
+def test_grid_cost_matches_the_brute_force_sum():
+    """The closed form is an identity, not an approximation.
+
+    ``grid_cost`` claims that the assignment-weighted squared alignment error
+    at all 4199 hypotheses follows from eleven numbers. That is either exactly
+    true or the cost volume is measuring something else, and the difference is
+    invisible in a loss curve -- a wrong-but-smooth surface trains fine and
+    localizes badly. So it is checked against the sum it replaces.
+    """
+    torch.manual_seed(0)
+    head = VolumeHead(32, 4, GridParams())
+    det = torch.randn(3, 48, 2) * 25
+    mp = torch.randn(3, 64, 2) * 25
+    assign = torch.rand(3, 48, 64).pow(6)
+
+    cost, mass = grid_cost(assign, det, mp, head.cell_t, head.cell_rot)
+    moved = torch.einsum("gij,bkj->bgki", head.cell_rot, det) + head.cell_t[None, :, None]
+    sq = (moved[:, :, :, None, :] - mp[:, None, None]).square().sum(-1)
+    brute = torch.einsum("bkl,bgkl->bg", assign, sq)
+
+    assert torch.allclose(cost, brute, rtol=1e-4, atol=1e-3), (cost - brute).abs().max()
+    assert bool((cost.argmin(-1) == brute.argmin(-1)).all())
+    assert torch.allclose(mass, assign.sum((1, 2)))
+
+
+def test_the_volume_minimum_is_the_pose_the_head_solves():
+    """The two output paths are one objective, so they cannot disagree.
+
+    Weighted Procrustes finds the minimum of exactly the surface ``grid_cost``
+    evaluates -- the per-point target form and the full double sum differ by a
+    constant in the pose, so they share a minimiser. That is the claim the
+    architecture rests on, and it is checkable to within half a cell.
+    """
+    torch.manual_seed(0)
+    head = VolumeHead(32, 4, GridParams())
+    plain = ProcrustesPoseHead()
+    map_pts = (torch.rand(4, 64, 2) - 0.5) * 80.0
+    truth = torch.tensor(
+        [
+            [1.5, 0.7, 0.02],
+            [-2.0, -0.5, -0.03],
+            [0.5, 0.0, 0.0],
+            [3.0, 1.0, 0.04],
+        ]
+    )
+    det_pts = G.transform_points(G.inverse(truth), map_pts[:, :40])
+    assign = torch.zeros(4, 40, 64)
+    assign[:, torch.arange(40), torch.arange(40)] = 1.0
+
+    pose, _ = plain(assign, det_pts, map_pts)
+    cost, _ = grid_cost(assign, det_pts, map_pts, head.cell_t, head.cell_rot)
+    best = head.cells[cost.argmin(-1)]
+
+    # Half a cell on each axis: the grid cannot do better, and neither can any
+    # argmin over it.
+    assert torch.allclose(pose, truth, atol=1e-4), pose - truth
+    assert bool(((pose - best).abs() <= 0.5 * head.pitch + 1e-6).all()), pose - best

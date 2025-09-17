@@ -43,17 +43,16 @@ class SoftMatcher(nn.Module):
     ) -> tuple[Tensor, Tensor]:
         """Match set ``a`` (detections) against set ``b`` (map).
 
-        Args:
-            fa: ``(B, K, D)`` detection point features.
-            fb: ``(B, L, D)`` map point features.
-            pad_a: ``(B, K)`` True where the token is padding.
-            pad_b: ``(B, L)`` likewise.
+        @param fa ``(B, K, D)`` detection point features.
+        @param fb ``(B, L, D)`` map point features.
+        @param pad_a ``(B, K)`` True where the token is padding.
+        @param pad_b ``(B, L)`` likewise.
 
-        Returns:
-            ``(assign (B, K, L), scores (B, K, L))``. ``assign`` is in ``[0, 1]``
-            and its row sums are at most one: mass short of one is the model
-            declining to match. ``scores`` is the raw compatibility, returned
-            for the matching loss, which needs the logits and not the product.
+        @return ``(assign (B, K, L), scores (B, K, L))``. ``assign`` is in
+            ``[0, 1]`` and its row sums are at most one: mass short of one is
+            the model declining to match. ``scores`` is the raw compatibility,
+            returned for the matching loss, which needs the logits and not the
+            product.
         """
         a = self.proj(fa) * self.scale
         b = self.proj(fb) * self.scale

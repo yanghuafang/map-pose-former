@@ -1,21 +1,21 @@
-"""The learned cost volume: a score for every pose hypothesis on a grid.
+"""The cost volume: the alignment error at every pose hypothesis on a grid.
 
-camera-map-localization scores an explicit grid of ``(forward, left, yaw)``
-hypotheses against a distance transform and takes the argmin. This head predicts
-that same surface instead of computing it, over the same three axes, and it is
-kept for the same three reasons the classical version needed it:
+camera-map-localization scores a grid of ``(forward, left, yaw)`` hypotheses
+against a distance transform and takes the argmin. This head scores the same
+grid on the same three axes -- and, like the classical version, it **computes**
+that surface rather than predicting it.
 
-* **Ambiguity is visible.** A stretch of parallel lane lines should produce a
-  ridge along the road, not a peak. A single regressed pose cannot say that; a
-  surface can, and looking at it is how you find out whether a model has
-  actually localized or has merely guessed the mean of the prior.
-* **Covariance falls out of it.** The spread of the surface about its peak is a
-  measurement covariance, which is what the downstream filter needs. It is
-  computed here the same way the classical repo computes it -- a softmax-weighted
-  second moment -- rather than regressed by a separate head, so the uncertainty
-  and the evidence cannot disagree.
-* **It survives quantization.** Classification over a grid degrades gracefully
-  as precision drops; direct coordinate regression does not.
+That is the decision this file exists for. An earlier version regressed the
+4199 logits from a pooled vector with an MLP: a third of the model's parameters
+spent drawing a picture of a cost surface, whose ridges are what the *prior
+over ridges* looks like and whose covariance is a prediction of uncertainty
+rather than a measurement of one. ``docs/ARCHITECTURE.md`` has the full
+argument and the two papers it follows.
+
+Computing it is free, which is the pleasant part: the assignment-weighted
+squared error is a quadratic in the hypothesis, so the whole grid follows in
+closed form from the same statistics :mod:`~mapposeformer.model.pose_head`
+already forms to solve for the pose. See :func:`grid_cost`.
 
 The grid extent must match the prior's truncation bounds. A target outside the
 grid has no correct cell, and the loss would be asking for something the head
@@ -34,6 +34,8 @@ from torch import Tensor
 from mapposeformer import geometry as G
 from mapposeformer.model.attention import AttentionPool
 
+_EPS = 1e-6
+
 
 @dataclass(frozen=True)
 class GridParams:
@@ -51,21 +53,88 @@ class GridParams:
         return self.num_x * self.num_y * self.num_yaw
 
 
-class VolumeHead(nn.Module):
-    """Pooled features -> hypothesis logits, covariance, and a trust score."""
+def grid_cost(
+    assign: Tensor, det: Tensor, mp: Tensor, t: Tensor, rot: Tensor
+) -> tuple[Tensor, Tensor]:
+    r"""Assignment-weighted squared alignment error at every hypothesis.
 
-    def __init__(self, dim: int, heads: int, grid: GridParams, min_std=(0.05, 0.05, 0.002)):
+    For a hypothesis :math:`(R, t)` the cost is
+
+    .. math:: C(R,t) = \sum_{ij} a_{ij} \, \lVert R d_i + t - m_j \rVert^2
+
+    which looks like a sum over ``G × K × L`` and is not. Expanding the square
+    separates the hypothesis from the data completely: :math:`\lVert R d_i
+    \rVert^2 = \lVert d_i \rVert^2` because rotations preserve length, and
+    every remaining term factors through one of eleven numbers --- the total
+    mass, two weighted second moments, two weighted centroids, and the
+    :math:`2 \times 2` cross-covariance :math:`M = \sum_{ij} a_{ij} d_i
+    m_j^\top`. Those are exactly the statistics weighted Procrustes forms to
+    find the *minimum* of this surface, so evaluating all 4199 cells of it
+    costs a handful of small matmuls on top.
+
+    @param assign ``(B, K, L)`` soft correspondence.
+    @param det ``(B, K, 2)`` detection points, ego frame.
+    @param mp ``(B, L, 2)`` map points, anchor frame.
+    @param t ``(G, 2)`` hypothesis translations.
+    @param rot ``(G, 2, 2)`` hypothesis rotations.
+
+    @return ``(cost (B, G), mass (B,))``. Exact -- ``tests/test_model.py``
+        checks it against the brute-force sum over every cell.
+    """
+    w = assign.sum(dim=2)  # (B, K) mass on each detection point
+    v = assign.sum(dim=1)  # (B, L) mass on each map point
+    mass = w.sum(dim=1)
+    sq_d = (w * det.square().sum(-1)).sum(1)
+    sq_m = (v * mp.square().sum(-1)).sum(1)
+    cen_d = torch.einsum("bk,bkc->bc", w, det)
+    cen_m = torch.einsum("bl,blc->bc", v, mp)
+    cross = det.transpose(1, 2) @ (assign @ mp)  # (B, 2, 2)
+
+    cost = (
+        (sq_d + sq_m).unsqueeze(1)
+        + mass.unsqueeze(1) * t.square().sum(-1)
+        + 2 * torch.einsum("gc,gcj,bj->bg", t, rot, cen_d)
+        # tr(R M), not the Frobenius product: the transpose is the whole
+        # difference between this surface and a differently shaped one.
+        - 2 * torch.einsum("gij,bji->bg", rot, cross)
+        - 2 * cen_m @ t.transpose(0, 1)
+    )
+    return cost, mass
+
+
+class VolumeHead(nn.Module):
+    """The measured cost surface, its covariance, and a trust score."""
+
+    def __init__(
+        self,
+        dim: int,
+        heads: int,
+        grid: GridParams,
+        min_std=(0.05, 0.05, 0.002),
+    ):
         super().__init__()
         self.grid = grid
         self.pool = AttentionPool(dim, heads)
-        self.logits = nn.Sequential(
-            nn.Linear(dim, 2 * dim), nn.GELU(), nn.Linear(2 * dim, grid.size)
-        )
+        # One learned scalar turns mean squared metres into logits, plus a
+        # per-sample correction: a frame resting on two correspondences and one
+        # resting on two hundred have surfaces worth trusting differently, and
+        # the shape alone cannot say which is which.
+        self.log_sharpness = nn.Parameter(torch.zeros(1))
+        self.sharpness = nn.Linear(dim, 1)
+        nn.init.zeros_(self.sharpness.weight)
+        nn.init.zeros_(self.sharpness.bias)
         # One scalar, not a full 3x3. The *shape* of the uncertainty is already
-        # in the surface; what a learned term adds is calibration -- the surface
-        # is sharper or flatter than the true error by a roughly constant factor,
-        # and that is all this is allowed to fix.
+        # in the surface; what a learned term adds is calibration -- the
+        # surface is sharper or flatter than the true error by a roughly
+        # constant factor, and that is all this is allowed to fix.
         self.log_scale = nn.Linear(dim, 1)
+        # Zero, so calibration starts at "no correction". Random weights here
+        # put ``exp(log_scale)`` anywhere over two orders of magnitude, and the
+        # samples that drew a small one report near-zero variance against a
+        # 1.5 m residual -- an NLL in the hundreds, for the first few hundred
+        # steps, from nothing but the initializer.
+        nn.init.zeros_(self.log_scale.weight)
+        nn.init.zeros_(self.log_scale.bias)
         self.trust = nn.Linear(dim, 1)
 
         deg = torch.pi / 180.0
@@ -73,11 +142,20 @@ class VolumeHead(nn.Module):
             torch.linspace(-grid.extent_x_m, grid.extent_x_m, grid.num_x),
             torch.linspace(-grid.extent_y_m, grid.extent_y_m, grid.num_y),
             torch.linspace(
-                -grid.extent_yaw_deg * deg, grid.extent_yaw_deg * deg, grid.num_yaw
+                -grid.extent_yaw_deg * deg,
+                grid.extent_yaw_deg * deg,
+                grid.num_yaw,
             ),
         )
-        cells = torch.stack(torch.meshgrid(*axes, indexing="ij"), dim=-1)
-        self.register_buffer("cells", cells.reshape(-1, 3), persistent=False)
+        cells = torch.stack(torch.meshgrid(*axes, indexing="ij"), dim=-1).reshape(-1, 3)
+        self.register_buffer("cells", cells, persistent=False)
+        # The same hypotheses as rotation matrices and translations, because
+        # that is the form the closed form wants and rebuilding them per step
+        # would be trigonometry in the inner loop.
+        c, s = torch.cos(cells[:, 2]), torch.sin(cells[:, 2])
+        rot = torch.stack([torch.stack([c, -s], -1), torch.stack([s, c], -1)], -2)
+        self.register_buffer("cell_t", cells[:, :2].contiguous(), persistent=False)
+        self.register_buffer("cell_rot", rot, persistent=False)
         # Cell pitch per axis, in that axis's own units. The volume loss needs
         # it to size its soft target, and deriving it there would mean an
         # ``unique()`` over the whole grid on every step.
@@ -88,27 +166,45 @@ class VolumeHead(nn.Module):
         )
         self.register_buffer("min_var", torch.tensor(min_std).square(), persistent=False)
 
-    def forward(self, tokens: Tensor, pad: Tensor) -> dict[str, Tensor]:
-        """Args: ``(B, N, D)`` tokens from both sets, ``(B, N)`` padding mask.
+    def forward(
+        self,
+        assign: Tensor,
+        det: Tensor,
+        mp: Tensor,
+        tokens: Tensor,
+        pad: Tensor,
+    ) -> dict[str, Tensor]:
+        """Args: ``(B, K, L)`` assignment, its two point sets, and the tokens.
 
         Returns a dict with ``logits (B, G)``, ``delta (B, 3)`` (the soft
-        argmax), ``cov (B, 3, 3)``, ``trust_logit (B,)`` and ``feat (B, D)``.
+        argmin), ``cov (B, 3, 3)``, ``trust_logit (B,)`` and ``feat (B, D)``.
         """
         g = self.pool(tokens, pad)
-        logits = self.logits(g)
 
-        # The statistics below weight *coordinates* by probabilities, so they
-        # run in fp32 for the reason ``geometry.exact_arithmetic`` gives. The
-        # logits themselves are returned untouched: their loss is a cross
-        # entropy, which autocast already keeps in fp32 by policy.
+        # Coordinates multiplied by weights, throughout -- which is the case
+        # ``geometry.exact_arithmetic`` exists for. bf16 would put a 0.25 m
+        # lattice under a 40 m map point and the surface would inherit it.
         with G.exact_arithmetic(tokens.device.type):
-            prob = F.softmax(logits.float(), dim=-1)
+            cost, mass = grid_cost(
+                assign.float(),
+                det.float(),
+                mp.float(),
+                self.cell_t,
+                self.cell_rot,
+            )
+            # Per correspondence, so the scale is a mean squared residual in
+            # metres and does not move with how much the matcher matched. The
+            # shift is free -- softmax ignores it -- and keeps the exponent
+            # away from the large common offset every cell shares.
+            cost = cost / mass.clamp_min(_EPS).unsqueeze(-1)
+            cost = cost - cost.min(dim=-1, keepdim=True).values
+            sharp = F.softplus(self.log_sharpness + self.sharpness(g.float()))
+            logits = -cost * sharp
+
+            prob = F.softmax(logits, dim=-1)
             mean = prob @ self.cells
             residual = self.cells.unsqueeze(0) - mean.unsqueeze(1)
             cov = torch.einsum("bg,bgi,bgj->bij", prob, residual, residual)
-            # ``g`` is cast rather than the result: with autocast off inside
-            # this block, a bf16 activation against fp32 weights is an
-            # error rather than a silent promotion.
             cov = cov * torch.exp(self.log_scale(g.float())).view(-1, 1, 1)
             # A floor on the diagonal, for the same reason the classical
             # filter gates on a flat cost surface: a peak one cell wide would

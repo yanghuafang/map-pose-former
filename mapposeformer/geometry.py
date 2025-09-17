@@ -26,23 +26,17 @@ from torch import Tensor
 def exact_arithmetic(device_type: str):
     """Run a block of coordinate arithmetic outside autocast, in fp32.
 
-    Autocast rewrites matmuls to bf16, and two places in this model multiply a
-    weight by a *coordinate*: the Procrustes target, ``assign @ map_pts``, and
-    the volume's soft argmax, ``prob @ cells``. bf16 keeps 8 mantissa bits, so
-    a 40 m coordinate lands on a 0.25 m lattice, and the pose inherits that as
-    error which averaging over correspondences reduces but does not remove --
-    measured at 8 mm of translation and 0.011 deg of yaw over 256 matches, and
-    worse on the sparse frames that are already the hard ones. The volume's
-    covariance is hit harder still, at five times its own variance floor.
+    Three places multiply a weight by a *coordinate*: the Procrustes target, the
+    volume's soft argmin, and the cost surface. bf16 keeps 8 mantissa bits, so a
+    40 m coordinate lands on a 0.25 m lattice and the pose inherits the error --
+    measured at 8 mm of translation, and five times the variance floor on the
+    covariance. The guarded arithmetic is a few hundred thousand FLOPs against
+    the model's tens of millions: precision given away for no speed.
 
-    None of it buys anything. The guarded arithmetic is a few hundred thousand
-    FLOPs against the model's tens of millions, so this is precision given away
-    for no speed.
+    CPU cannot catch this by accident, because autocast is off there;
+    ``tests/test_model.py`` asks for bf16 explicitly.
 
-    It cannot be caught on CPU by accident, because autocast is off there --
-    which is how the claim that this was already handled sat in
-    ``docs/TRAINING.md`` while nothing in the code did it.
-    ``tests/test_model.py`` runs both heads under bf16 to keep it honest.
+    @param device_type Autocast device string, e.g. ``"cuda"``.
     """
     with torch.autocast(device_type=device_type, enabled=False):
         yield
@@ -61,12 +55,10 @@ def wrap_angle(a: Tensor) -> Tensor:
 def compose(a: Tensor, b: Tensor) -> Tensor:
     """``a ∘ b``: apply ``b`` in the frame ``a`` defines.
 
-    Args:
-        a: ``(..., 3)`` pose.
-        b: ``(..., 3)`` pose, expressed in ``a``'s frame.
+    @param a ``(..., 3)`` pose.
+    @param b ``(..., 3)`` pose, expressed in ``a``'s frame.
 
-    Returns:
-        ``(..., 3)`` the composed pose, in ``a``'s parent frame.
+    @return ``(..., 3)`` the composed pose, in ``a``'s parent frame.
     """
     ca, sa = torch.cos(a[..., 2]), torch.sin(a[..., 2])
     x = a[..., 0] + ca * b[..., 0] - sa * b[..., 1]
@@ -95,12 +87,10 @@ def relative(a: Tensor, b: Tensor) -> Tensor:
 def transform_points(pose: Tensor, pts: Tensor) -> Tensor:
     """Move points from the frame ``pose`` describes into ``pose``'s parent.
 
-    Args:
-        pose: ``(..., 3)``.
-        pts: ``(..., N, 2)``, in the child frame.
+    @param pose ``(..., 3)``.
+    @param pts ``(..., N, 2)``, in the child frame.
 
-    Returns:
-        ``(..., N, 2)`` in the parent frame.
+    @return ``(..., N, 2)`` in the parent frame.
     """
     c, s = torch.cos(pose[..., 2]), torch.sin(pose[..., 2])
     x, y = pts[..., 0], pts[..., 1]
