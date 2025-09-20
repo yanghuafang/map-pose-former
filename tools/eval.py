@@ -2,7 +2,7 @@
 """Evaluate a checkpoint on a split.
 
     tools/eval.py runs/default/best.pt --split test
-    tools/eval.py runs/default/best.pt --split test data.sample.keep_classes=[0,1]
+    tools/eval.py runs/default/best.pt data.sample.keep_classes=[0,1]
 
 The second form is the ablation from ``mapposeformer/data/classes.py``: keep
 only the classes that run parallel to the road, and watch longitudinal error
@@ -22,10 +22,10 @@ from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mapposeformer.config import parse_overrides, with_overrides  # noqa: E402
-from mapposeformer.data.synthetic import SyntheticDataset  # noqa: E402
-from mapposeformer.engine import evaluate, format_report  # noqa: E402
-from mapposeformer.model import MapPoseFormer  # noqa: E402
+from mapposeformer.config import parse_overrides, with_overrides
+from mapposeformer.data.synthetic import SyntheticDataset
+from mapposeformer.engine import evaluate, format_report
+from mapposeformer.model import MapPoseFormer
 
 
 def main() -> int:

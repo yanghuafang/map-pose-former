@@ -21,10 +21,10 @@ on lane geometry alone, against a 1.50 m prior, while heading does not move.
 Poles and signs turn out to carry most of the along-track information, and
 nuScenes has neither. Full table and reading in [RESULTS.md](RESULTS.md).
 
-That last row also produced something nobody asked for: strip the lane geometry
-and the closed-form head returns 14 m of error, nine times *worse* than doing
-nothing, and the trust head does not catch it. A `mass` gate is the obvious
-answer and it is not yet written — M4 cannot ship without one.
+That last row also produced something nobody asked for: strip the lane
+geometry and the closed-form head returns 14 m of error, nine times *worse*
+than doing nothing, and the trust head does not catch it. So the evaluator
+gates on `mass` as well: a frame needs evidence, not just confidence.
 
 **Done — the head comparison, and it went the other way.** The regression
 baseline matches the closed-form head in distribution and beats it seven to one

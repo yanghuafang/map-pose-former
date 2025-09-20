@@ -211,10 +211,13 @@ def test_the_volume_minimum_is_the_pose_the_head_solves():
     evaluates -- the per-point target form and the full double sum differ by a
     constant in the pose, so they share a minimiser. That is the claim the
     architecture rests on, and it is checkable to within half a cell.
+    Robustness is switched off here on purpose: IRLS deliberately minimises a
+    *different*, reweighted objective, and the agreement being tested is the
+    one between the plain solve and the surface.
     """
     torch.manual_seed(0)
     head = VolumeHead(32, 4, GridParams())
-    plain = ProcrustesPoseHead()
+    plain = ProcrustesPoseHead(irls_iters=0, min_row_mass=0.0)
     map_pts = (torch.rand(4, 64, 2) - 0.5) * 80.0
     truth = torch.tensor(
         [
@@ -236,3 +239,36 @@ def test_the_volume_minimum_is_the_pose_the_head_solves():
     # argmin over it.
     assert torch.allclose(pose, truth, atol=1e-4), pose - truth
     assert bool(((pose - best).abs() <= 0.5 * head.pitch + 1e-6).all()), pose - best
+
+
+def test_the_robust_solve_survives_wrong_correspondences():
+    """The failure that cost the closed-form head its first comparison.
+
+    A rigid fit over a handful of confident, wrong matches is unbounded: it
+    moves the answer arbitrarily far, which is how an ablation reached 30.9
+    degrees of heading error where a bounded regressor could only be vague.
+    Reweighting is the standard repair, and this is the case it has to handle.
+    """
+    torch.manual_seed(0)
+    map_pts = (torch.rand(8, 60, 2) - 0.5) * 80.0
+    truth = torch.zeros(8, 3)
+    truth[:, 0], truth[:, 1], truth[:, 2] = 1.2, -0.4, 0.02
+    det_pts = G.transform_points(G.inverse(truth), map_pts[:, :40])
+
+    assign = torch.zeros(8, 40, 60)
+    assign[:, torch.arange(40), torch.arange(40)] = 1.0
+    # A fifth of the correspondences point somewhere else entirely, and say so
+    # just as confidently as the rest.
+    assign[:, :8] = 0.0
+    assign[:, torch.arange(8), torch.arange(50, 58)] = 1.0
+
+    naive = ProcrustesPoseHead(irls_iters=0, min_row_mass=0.0)(assign, det_pts, map_pts)[0]
+    robust = ProcrustesPoseHead()(assign, det_pts, map_pts)[0]
+    err = lambda p: (p - truth).abs()  # noqa: E731
+
+    assert float(err(robust)[:, :2].norm(dim=-1).mean()) < 0.10
+    assert float(err(robust)[:, 2].abs().max()) < math.radians(0.5)
+    # ...and it is the reweighting doing it, not the problem being easy.
+    assert float(err(naive)[:, :2].norm(dim=-1).mean()) > 5 * float(
+        err(robust)[:, :2].norm(dim=-1).mean()
+    )

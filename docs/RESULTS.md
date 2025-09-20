@@ -90,10 +90,11 @@ handful of bad matches move the answer arbitrarily far, where a regressor
 bounded by `tanh` would simply have returned something small and wrong.
 
 That is a real cost of solving the geometry rather than learning it, and it is
-the argument for `mass` and for the trust head existing at all. **The trust head
-does not catch it**: it still reports 9.97 m on the frames it keeps. Feeding
-that to a filter would be worse than feeding it nothing, and M4 has to handle
-it — a gate on `mass` is the obvious candidate and it is not yet written.
+the argument for `mass` and for the trust head existing at all. **The trust
+head does not catch it**: it still reports 9.97 m on the frames it keeps.
+Feeding that to a filter would be worse than feeding it nothing, so `mass` is
+gated separately: a frame is kept only if the trust score passes *and* the
+assignment mass clears `min_mass`.
 
 ## M1 — the two pose heads, and a claim that did not survive
 
