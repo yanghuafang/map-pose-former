@@ -272,3 +272,39 @@ def test_the_robust_solve_survives_wrong_correspondences():
     assert float(err(naive)[:, :2].norm(dim=-1).mean()) > 5 * float(
         err(robust)[:, :2].norm(dim=-1).mean()
     )
+
+
+def test_calibration_separates_honest_from_overconfident():
+    """ANEES near one when the covariance matches the errors, and above it when
+    the covariance is too small.
+
+    The statistic that says whether a filter can believe this model. An accurate
+    pose with a dishonest covariance is worse than an inaccurate one with a
+    truthful covariance, because the filter weights by the second number and
+    has no way to check it.
+    """
+    from mapposeformer.metrics import Calibration
+
+    torch.manual_seed(0)
+    n = 20000
+    std = torch.tensor([0.4, 0.15, 0.004])
+    gt = torch.zeros(n, 3)
+    pred = torch.randn(n, 3) * std
+
+    honest = Calibration()
+    honest.update(pred, gt, torch.diag_embed(std.square().expand(n, 3)))
+    d = honest.as_dict()
+    assert 0.9 < d["anees"] < 1.1, d
+    assert 0.93 < d["coverage_95"] < 0.97, d
+    # The median of a calibrated NEES is the chi-square median, 0.789 per dof,
+    # not 1.0. Judged against one it reads "pessimistic" for an estimator that
+    # is exactly right, which is a verdict worth asserting and not just a
+    # statistic worth printing.
+    assert abs(d["anees_median"] - Calibration.CHI2_MEDIAN) < 0.03, d
+    assert "calibrated" in honest.format(), honest.format()
+
+    liar = Calibration()
+    liar.update(pred, gt, torch.diag_embed((std / 3).square().expand(n, 3)))
+    d = liar.as_dict()
+    assert d["anees"] > 5.0, d
+    assert d["coverage_95"] < 0.5, d

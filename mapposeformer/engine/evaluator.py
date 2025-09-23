@@ -3,7 +3,8 @@
 Four blocks come back, and the first is the one usually missing from a paper.
 **do-nothing** is the prior's own error -- the number the model must beat before
 any other number means anything. **all** is every frame. **trusted** is what a
-downstream filter would actually see.
+downstream filter would actually see. **calibration** asks whether the reported
+covariance is honest, which no RMSE can say.
 
 **Two gates, not one.** The learned trust score answers "does this look like a
 frame I get right?". It is structurally incapable of answering "did I have any
@@ -19,7 +20,7 @@ import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
 
-from mapposeformer.metrics import ErrorSummary
+from mapposeformer.metrics import Calibration, ErrorSummary
 
 
 def _to(batch: dict[str, Tensor], device: str) -> dict[str, Tensor]:
@@ -43,13 +44,14 @@ def evaluate(
         to mean anything, and the pose it returns is closer to a default than
         to an estimate.
 
-    @return ``{"nothing", "all", "trusted", "metrics"}`` -- three
-        :class:`ErrorSummary` and a flat metrics dict with everything under a
-        prefix, ready for TensorBoard.
+    @return ``{"nothing", "all", "trusted", "calibration", "metrics"}`` --
+        three :class:`ErrorSummary`, one :class:`Calibration`, and a flat
+        metrics dict with everything under a prefix, ready for TensorBoard.
     """
     was_training = model.training
     model.eval()
     nothing, every, trusted = ErrorSummary(), ErrorSummary(), ErrorSummary()
+    calib = Calibration()
     n_trusted = n_total = n_low_mass = 0
 
     for batch in loader:
@@ -57,6 +59,7 @@ def evaluate(
         out = model(batch)
         every.update(out["delta"], batch["delta"])
         nothing.update(torch.zeros_like(batch["delta"]), batch["delta"])
+        calib.update(out["delta"], batch["delta"], out["cov"])
         enough = out["mass"] >= min_mass
         keep = (torch.sigmoid(out["trust_logit"]) >= trust_threshold) & enough
         n_total += keep.numel()
@@ -68,6 +71,7 @@ def evaluate(
     metrics = {f"nothing/{k}": v for k, v in nothing.as_dict().items()}
     metrics.update({f"all/{k}": v for k, v in every.as_dict().items()})
     metrics.update({f"trusted/{k}": v for k, v in trusted.as_dict().items()})
+    metrics.update({f"calib/{k}": v for k, v in calib.as_dict().items()})
     metrics["trusted/fraction"] = n_trusted / max(n_total, 1)
     metrics["trusted/rejected_low_mass"] = n_low_mass / max(n_total, 1)
     model.train(was_training)
@@ -75,6 +79,7 @@ def evaluate(
         "nothing": nothing,
         "all": every,
         "trusted": trusted,
+        "calibration": calib,
         "metrics": metrics,
     }
 
@@ -96,4 +101,6 @@ def format_report(result: dict[str, object]) -> str:
     for title, key in blocks:
         summary: ErrorSummary = result[key]  # type: ignore[assignment]
         summaries.append(f"{title}\n{summary.format()}")
+    calib: Calibration = result["calibration"]  # type: ignore[assignment]
+    summaries.append(f"is the covariance honest?\n{calib.format()}")
     return "\n\n".join(summaries)

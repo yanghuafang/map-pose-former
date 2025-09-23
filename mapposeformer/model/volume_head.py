@@ -205,7 +205,14 @@ class VolumeHead(nn.Module):
             mean = prob @ self.cells
             residual = self.cells.unsqueeze(0) - mean.unsqueeze(1)
             cov = torch.einsum("bg,bgi,bgj->bij", prob, residual, residual)
-            cov = cov * torch.exp(self.log_scale(g.float())).view(-1, 1, 1)
+            # Clamped before the exponential. Training pushes this weight
+            # positive by design, and fp32 ``exp`` overflows at 88 -- so
+            # without a bound the scale reaches inf eventually rather than
+            # by accident, and every weight in the model is NaN one step
+            # later. Eight is three orders of magnitude of correction
+            # either way, far more than a calibration factor needs.
+            scale = self.log_scale(g.float()).clamp(-8.0, 8.0)
+            cov = cov * torch.exp(scale).view(-1, 1, 1)
             # A floor on the diagonal, for the same reason the classical
             # filter gates on a flat cost surface: a peak one cell wide would
             # otherwise report near-zero variance and let a single frame
