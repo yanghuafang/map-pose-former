@@ -1,8 +1,8 @@
 """Training objectives.
 
-Four terms, and the interesting one is not the pose term.
+Five terms, and the interesting one is not the pose term.
 
-``pose``      Huber on the predicted correction. The objective everyone expects.
+``pose``      Huber on the correction, at every refinement pass.
 ``volume``    Cross-entropy over the hypothesis grid, against a soft target.
 ``match``     Direct supervision of the assignment matrix, from geometry.
 ``cov``       Gaussian NLL, so the reported uncertainty means something.
@@ -53,6 +53,12 @@ class LossParams:
     detection noise (about 0.35 m including correlated bias) and comfortably
     below the 3.5 m lane spacing, so the target is neither missing nor
     ambiguous."""
+    refine_gamma: float = 0.8
+    """Deep-supervision decay across refinement passes, RAFT's schedule:
+    pass ``i`` of ``I`` is weighted ``gamma ** (I - 1 - i)``. The early passes
+    are supervised at all because a refinement starting from a bad first
+    estimate never reaches a good second one -- and left unsupervised, the
+    first pass has no reason to be anything in particular."""
     volume_sigma_cells: float = 1.0
     """Width of the soft target, in grid cells. A one-hot target would tell the
     surface nothing about how wrong a neighbouring cell is, and the covariance
@@ -62,19 +68,29 @@ class LossParams:
 
 
 def _pose_residual(pred: Tensor, gt: Tensor, lever_m: float) -> Tensor:
-    """``(B, 3)`` error in the ground-truth frame, yaw scaled to metres.
+    """``(..., 3)`` error in the ground-truth frame, yaw scaled to metres.
 
     Resolved in the *ground-truth* frame rather than the prediction's, so a
     heading mistake does not rotate the axes its own translation error is
     reported on.
     """
     e = G.relative(gt, pred)
-    return torch.stack([e[:, 0], e[:, 1], e[:, 2] * lever_m], dim=-1)
+    return torch.stack([e[..., 0], e[..., 1], e[..., 2] * lever_m], dim=-1)
 
 
-def pose_loss(pred: Tensor, gt: Tensor, p: LossParams) -> Tensor:
-    r = _pose_residual(pred, gt, p.yaw_lever_m)
-    return F.huber_loss(r, torch.zeros_like(r), delta=p.huber_delta_m)
+def pose_loss(deltas: Tensor, gt: Tensor, p: LossParams) -> Tensor:
+    """Huber on every refinement pass, weighted towards the last.
+
+    @param deltas ``(B, I, 3)`` -- the model's estimate after each pass.
+    @param gt ``(B, 3)`` the true correction.
+    """
+    r = _pose_residual(deltas, gt.unsqueeze(1), p.yaw_lever_m)
+    per_pass = F.huber_loss(
+        r, torch.zeros_like(r), delta=p.huber_delta_m, reduction="none"
+    ).mean(dim=(0, 2))
+    i = deltas.shape[1]
+    w = p.refine_gamma ** torch.arange(i - 1, -1, -1, device=r.device, dtype=r.dtype)
+    return (w * per_pass).sum() / w.sum()
 
 
 def volume_loss(
@@ -82,14 +98,13 @@ def volume_loss(
 ) -> Tensor:
     """Cross-entropy against a Gaussian centred on the true correction.
 
-    Args:
-        logits: ``(B, G)``.
-        cells: ``(G, 3)`` the hypothesis coordinates, from the volume head.
-        pitch: ``(3,)`` cell pitch per axis, in that axis's own units. One sigma
-            per axis and not a scalar: metres and radians are not comparable,
-            and a single sigma makes the yaw axis either one-hot or uniform
-            depending on which unit was chosen.
-        gt: ``(B, 3)`` the true correction.
+    @param logits ``(B, G)``.
+    @param cells ``(G, 3)`` the hypothesis coordinates, from the volume head.
+    @param pitch ``(3,)`` cell pitch per axis, in that axis's own units. One
+        sigma per axis and not a scalar: metres and radians are not comparable,
+        and a single sigma makes the yaw axis either one-hot or uniform
+        depending on which unit was chosen.
+    @param gt ``(B, 3)`` the true correction.
     """
     sigma = p.volume_sigma_cells * pitch.clamp_min(_EPS)
     d = (cells.unsqueeze(0) - gt.unsqueeze(1)) / sigma
@@ -98,18 +113,25 @@ def volume_loss(
 
 
 def match_loss(
-    assign: Tensor, batch: dict[str, Tensor], p: LossParams
+    out: dict[str, Tensor], batch: dict[str, Tensor], p: LossParams
 ) -> tuple[Tensor, Tensor]:
     """Supervise the assignment from geometry alone.
+
+    The detections come from the model's own output rather than from the
+    batch, because the model does not match the batch's detections: it matches
+    those *plus* the previous frames', warped here by egomotion. Re-deriving
+    that assembly in the loss would be the same geometry written twice and
+    wrong once.
 
     Returns ``(loss, matched_fraction)``. The fraction is not used by the
     optimizer; it is reported because it says how much supervision the term
     actually carried on a given batch, and a silent collapse to zero positives
     is otherwise invisible.
     """
-    det = batch["det_pts"].flatten(1, 2)
+    assign = out["assign"]
+    det = out["det_xy"]
     mp = batch["map_pts"].flatten(1, 2)
-    dvalid = batch["det_pmask"].flatten(1)
+    dvalid = out["det_valid"]
     mvalid = batch["map_pmask"].flatten(1)
 
     aligned = G.transform_points(batch["delta"], det)
@@ -178,9 +200,9 @@ def compute_losses(
 ) -> tuple[Tensor, dict[str, float]]:
     """Total loss and a dict of scalars for logging."""
     gt = batch["delta"]
-    lp = pose_loss(out["delta"], gt, p)
+    lp = pose_loss(out["deltas"], gt, p)
     lv = volume_loss(out["logits"], cells, pitch, gt, p)
-    lm, matched = match_loss(out["assign"], batch, p)
+    lm, matched = match_loss(out, batch, p)
     lc = covariance_loss(out["cov"], out["delta"], gt)
     lt = trust_loss(out["trust_logit"], out["delta"], gt, p)
     total = p.w_pose * lp + p.w_volume * lv + p.w_match * lm + p.w_cov * lc + p.w_trust * lt

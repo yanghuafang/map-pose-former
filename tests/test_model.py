@@ -308,3 +308,11 @@ def test_calibration_separates_honest_from_overconfident():
     d = liar.as_dict()
     assert d["anees"] > 5.0, d
     assert d["coverage_95"] < 0.5, d
+
+
+def test_refinement_runs_the_trunk_once_per_pass():
+    """Deep supervision needs one estimate per pass; the last is the answer."""
+    for iters in (1, 3):
+        out = MapPoseFormer(ModelParams(refine_iters=iters))(_batch(2))
+        assert out["deltas"].shape == (2, iters, 3)
+        assert torch.equal(out["delta"], out["deltas"][:, -1])
