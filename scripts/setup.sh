@@ -16,6 +16,7 @@
 # terms of service, and a script must not accept those on anyone's behalf.
 #
 # Doxygen is not installed here: it is a system package, not a Python one.
+# scripts/docs.sh names the brew and apt commands when it is missing.
 
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."

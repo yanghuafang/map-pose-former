@@ -50,6 +50,7 @@ def relative(a: Tensor, b: Tensor) -> Tensor:
     """
 ```
 
+`./scripts/docs.sh` builds the reference into `build/doxygen/html`.
 
 ## Tensor conventions
 
