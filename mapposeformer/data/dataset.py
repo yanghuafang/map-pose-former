@@ -35,4 +35,4 @@ class DataParams:
     sample: SampleParams = field(default_factory=SampleParams)
     augment: bool = True
     """Redraw the prior error and detection noise every epoch on the training
-    split. Validation never does, so its numbers are comparable across epochs."""
+    split. Validation never does, so its numbers compare across epochs."""

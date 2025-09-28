@@ -5,9 +5,9 @@
 #   ./scripts/ci.sh            # format, lint, tests
 #   ./scripts/ci.sh --smoke    # ...and the end-to-end smoke run (a few minutes)
 #
-# ruff is optional: if it is not installed the style gates are skipped with a
-# notice rather than a failure, so a fresh checkout is never blocked on a tool
-# that has nothing to do with localization.
+# scripts/setup.sh installs ruff, so the skip below is for a checkout that has
+# not been set up yet -- a notice rather than a failure, so a first run is
+# never blocked on a tool that has nothing to do with localization.
 
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."

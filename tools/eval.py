@@ -33,7 +33,9 @@ def main() -> int:
     ap.add_argument("checkpoint")
     ap.add_argument("--split", default="test", choices=["train", "val", "test"])
     ap.add_argument("--batch-size", type=int, default=64)
-    ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument(
+        "--device", default="cuda" if torch.cuda.is_available() else "cpu"
+    )
     ap.add_argument("--trust-threshold", type=float, default=0.5)
     ap.add_argument("overrides", nargs="*", help="section.field=value")
     args = ap.parse_args()
@@ -48,7 +50,11 @@ def main() -> int:
     dataset = SyntheticDataset(cfg.data, args.split)
     loader = DataLoader(dataset, batch_size=args.batch_size, num_workers=4)
     print(f"{args.checkpoint}  split={args.split}  frames={len(dataset)}")
-    print(format_report(evaluate(model, loader, args.device, args.trust_threshold)))
+    print(
+        format_report(
+            evaluate(model, loader, args.device, args.trust_threshold)
+        )
+    )
     return 0
 
 

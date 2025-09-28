@@ -1,10 +1,5 @@
 """Landmark classes, and what each one can tell a localizer.
 
-The table below is the reason this project exists in the shape it does, and it
-is copied -- with its conclusions intact -- from camera-map-localization's
-architecture notes. A localizer searching three degrees of freedom needs
-landmarks that constrain all three, and map features are not interchangeable:
-
     class            lateral   longitudinal   heading
     LANE_DIVIDER     strong    ~none          strong
     ROAD_BOUNDARY    strong    ~none          strong
@@ -13,14 +8,14 @@ landmarks that constrain all three, and map features are not interchangeable:
     POLE             strong    strong         moderate
     TRAFFIC_SIGN     strong    strong         moderate
 
-Lane geometry runs *parallel* to travel, so sliding a hypothesis down the road
-costs almost nothing: a model fed only lane detections has an unobservable
-degree of freedom, and no amount of training fixes it. The upright and
-perpendicular features are what pin along-track position.
+Copied, with its conclusions, from camera-map-localization. Lane geometry runs
+*parallel* to travel, so sliding a hypothesis down the road costs almost
+nothing: a model fed only lane detections has an unobservable degree of freedom
+that training cannot fix. Upright and perpendicular features pin along-track
+position.
 
-This is a claim, and the synthetic dataset exists partly so that it can be
-tested rather than repeated -- see ``docs/DATASET.md``, "the ablation that
-matters".
+That is a claim, and the synthetic dataset exists partly so it can be tested --
+``docs/DATASET.md``, "Ablations".
 """
 
 from __future__ import annotations
@@ -68,3 +63,27 @@ NUSCENES_AVAILABLE = (
     LandmarkClass.PED_CROSSING,
     LandmarkClass.STOP_LINE,
 )
+
+
+class MarkType(enum.IntEnum):
+    """Paint style of a lane element. Argoverse 2 calls this ``mark_type``.
+
+    A dashed line is stripes, and a stripe *end* is along-track evidence -- the
+    one thing lane geometry is otherwise blind to. Real vector maps throw those
+    ends away and keep the attribute that implies them, so this dataset does the
+    same: the map stores the polyline and the style; the detector sees paint.
+    ``docs/DATASET.md`` has the experiment that makes possible.
+
+    Integer values are embedding indices: append, never reorder.
+    """
+
+    NONE = 0
+    """Not a painted line: poles, signs, crossings, stop lines."""
+    SOLID = 1
+    DASHED = 2
+
+
+NUM_ATTRS = len(MarkType)
+
+#: Classes that carry a paint style. Everything else is ``MarkType.NONE``.
+PAINTED = (LandmarkClass.LANE_DIVIDER, LandmarkClass.ROAD_BOUNDARY)

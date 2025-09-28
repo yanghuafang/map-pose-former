@@ -1,19 +1,31 @@
-# The reference student: ~3.4M parameters, one RTX A6000, a couple of hours.
+# The reference student: ~2.3M parameters, one RTX A6000.
 # Everything not listed here is the dataclass default -- see
 # mapposeformer/config.py and the params dataclasses it composes.
+#
+# It got *smaller* when the cost volume stopped being regressed: an MLP from a
+# pooled vector to 4199 logits was 1.1M parameters, a third of the model, spent
+# predicting a surface that is now computed. See mapposeformer/model/volume_head.py.
 data:
   num_scenes: {train: 800, val: 60, test: 120}
 model:
   dim: 128
   num_layers: 4
+  # head_dim is dim/num_heads = 32, and every attention matmul contracts over
+  # it -- too small to keep a tensor core fed, which is why this model reaches
+  # about 6% of the card's dense bf16 throughput. Widening the heads does not
+  # fix it: at a fixed dim of 128, one and two heads are both *slower* end to
+  # end than four, because at batch 1 the model is launch-bound and the matmul
+  # saving never reaches the wall clock. docs/RESULTS.md has the sweep.
   num_heads: 4
 train:
   epochs: 40
+  # 64: 8.0 GiB, so it runs on any card from 12 GiB up. 128 is ~25% faster on
+  # an A6000 and needs 16 GiB.
   batch_size: 64
   lr: 3.0e-4
   num_workers: 16
-  # The box has 20 logical cores and the loader is the limit: 8 workers
-  # gave 294 frames/s against the model's 675. Measured with tools/bench.py;
-  # 20 workers is slower than 16, which is contention, not headroom.
+  # The box has 20 logical cores and the loader is the limit. Three frames of
+  # detections per sample rather than one made it more so -- rerun
+  # tools/bench.py before believing any model-side optimisation is worth it.
   amp: bf16
   out_dir: runs/base

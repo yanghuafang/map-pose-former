@@ -17,13 +17,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mapposeformer.config import load_config, parse_overrides  # noqa: E402
-from mapposeformer.engine import Trainer  # noqa: E402
+from mapposeformer.config import load_config, parse_overrides
+from mapposeformer.engine import Trainer
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--config", help="YAML config; omit for the dataclass defaults")
+    ap.add_argument(
+        "--config", help="YAML config; omit for the dataclass defaults"
+    )
     ap.add_argument("overrides", nargs="*", help="section.field=value")
     args = ap.parse_args()
 

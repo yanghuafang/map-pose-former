@@ -85,11 +85,18 @@ class Trainer:
             betas=(0.9, 0.95),
         )
         self.scaler = torch.amp.GradScaler(
-            "cuda", enabled=(cfg.train.amp == "fp16" and self.device.startswith("cuda"))
+            "cuda",
+            enabled=(
+                cfg.train.amp == "fp16" and self.device.startswith("cuda")
+            ),
         )
 
-        steps_per_epoch = max(len(self.train_loader), 1)
-        self.total_steps = cfg.train.max_steps or steps_per_epoch * cfg.train.epochs
+        steps_per_epoch = max(
+            len(self.train_loader) // cfg.train.accum_steps, 1
+        )
+        self.total_steps = (
+            cfg.train.max_steps or steps_per_epoch * cfg.train.epochs
+        )
         self.warmup = int(cfg.train.warmup_frac * self.total_steps)
         self.step = 0
         self.writer = self._writer()
@@ -109,13 +116,18 @@ class Trainer:
         try:
             from torch.utils.tensorboard import SummaryWriter
         except ImportError:
-            print("tensorboard not installed; logging to stdout and metrics.jsonl only")
+            print(
+                "tensorboard not installed;"
+                " logging to stdout and metrics.jsonl only"
+            )
             return None
         return SummaryWriter(str(self.out / "tb"))
 
     def _log(self, tag: str, values: dict[str, float]) -> None:
         with (self.out / "metrics.jsonl").open("a") as fh:
-            fh.write(json.dumps({"step": self.step, "tag": tag, **values}) + "\n")
+            fh.write(
+                json.dumps({"step": self.step, "tag": tag, **values}) + "\n"
+            )
         if self.writer is not None:
             for k, v in values.items():
                 self.writer.add_scalar(f"{tag}/{k}", v, self.step)
@@ -129,21 +141,32 @@ class Trainer:
         cfg = self.cfg.train
         best = float("inf")
         print(
-            f"{sum(p.numel() for p in self.model.parameters()) / 1e6:.2f}M params, "
+            f"{sum(p.numel() for p in self.model.parameters()) / 1e6:.2f}M"
+            f" params, "
             f"{len(self.train_set)} train frames, {self.total_steps} steps, "
             f"device {self.device}"
         )
         for epoch in range(cfg.epochs):
             self.train_set.set_epoch(epoch)
             t0, seen = time.time(), 0
-            for batch in self.train_loader:
-                batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
+            for micro, batch in enumerate(self.train_loader):
+                batch = {
+                    k: v.to(self.device, non_blocking=True)
+                    for k, v in batch.items()
+                }
                 with _autocast(self.device, cfg.amp):
                     out = self.model(batch)
-                    total, scalars = compute_losses(out, batch, cells, pitch, self.cfg.loss)
+                    total, scalars = compute_losses(
+                        out, batch, cells, pitch, self.cfg.loss
+                    )
 
-                self.opt.zero_grad(set_to_none=True)
-                self.scaler.scale(total).backward()
+                # Divided by the accumulation count, because the gradients of
+                # the micro-batches are summed and the objective is their mean.
+                self.scaler.scale(total / cfg.accum_steps).backward()
+                seen += batch["delta"].shape[0]
+                if (micro + 1) % cfg.accum_steps:
+                    continue  # keep accumulating; do not step or clip yet
+
                 self.scaler.unscale_(self.opt)
                 grad = torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(), cfg.grad_clip
@@ -153,9 +176,11 @@ class Trainer:
                     group["lr"] = cfg.lr * scale
                 self.scaler.step(self.opt)
                 self.scaler.update()
+                # Zeroed *after* the step, not before the backward, so the
+                # accumulated gradients survive until they have been applied.
+                self.opt.zero_grad(set_to_none=True)
 
                 self.step += 1
-                seen += batch["delta"].shape[0]
                 if self.step % cfg.log_every == 0:
                     scalars["grad_norm"] = float(grad)
                     scalars["lr"] = self.opt.param_groups[0]["lr"]
@@ -168,7 +193,9 @@ class Trainer:
                 if cfg.max_steps and self.step >= cfg.max_steps:
                     break
 
-            if (epoch + 1) % cfg.eval_every == 0 or self.step >= self.total_steps:
+            if (
+                epoch + 1
+            ) % cfg.eval_every == 0 or self.step >= self.total_steps:
                 result = evaluate(self.model, self.val_loader, self.device)
                 self._log("val", result["metrics"])  # type: ignore[arg-type]
                 print(format_report(result))

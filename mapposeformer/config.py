@@ -51,6 +51,14 @@ class TrainParams:
     max_steps: int = 0
     """Stop after this many optimizer steps; 0 means run the full schedule.
     The smoke test uses it."""
+    accum_steps: int = 1
+    """Micro-batches accumulated into one optimizer step.
+
+    The effective batch is ``batch_size * accum_steps`` at the memory cost of
+    ``batch_size`` alone, so a smaller card costs wall clock rather than
+    gradient quality. Neither default config needs it; it exists so a reader
+    on a 12 GiB card can halve the batch, set this to 2, and get the same
+    optimizer trajectory."""
 
 
 @dataclass
@@ -89,18 +97,20 @@ def with_overrides(obj: Any, values: dict[str, Any]) -> Any:
     return dataclasses.replace(obj, **kwargs)
 
 
-def load_config(path: str | Path | None, overrides: dict[str, Any] | None = None) -> Config:
+def load_config(
+    path: str | Path | None, overrides: dict[str, Any] | None = None
+) -> Config:
     """Read a YAML config, apply CLI overrides, and validate the result.
 
-    Args:
-        path: YAML file with top-level ``data``, ``model``, ``loss``, ``train``
-            sections, any of which may be omitted.
-        overrides: Already-parsed dotted overrides, e.g.
-            ``{"train": {"lr": 1e-3}}``, applied on top of the file.
+    @param path YAML file with top-level ``data``, ``model``, ``loss``,
+        ``train`` sections, any of which may be omitted.
+    @param overrides Already-parsed dotted overrides, e.g. ``{"train": {"lr":
+        1e-3}}``, applied on top of the file.
     """
     raw: dict[str, Any] = {}
     if path is not None:
-        import yaml  # deferred: the smoke path and the tests need no config file
+        # Deferred: the smoke path and the tests need no config file.
+        import yaml
 
         raw = yaml.safe_load(Path(path).read_text()) or {}
     for section, values in (overrides or {}).items():
@@ -113,15 +123,25 @@ def load_config(path: str | Path | None, overrides: dict[str, Any] | None = None
 def _validate(cfg: Config) -> None:
     """Catch the cross-section mismatches that produce quiet, wrong training."""
     sp, mp, gp = cfg.data.sample, cfg.model, cfg.model.grid
-    if (sp.max_map_elements, sp.max_det_elements, sp.points_per_element) != (
+    shape = (
+        sp.max_map_elements,
+        sp.max_det_elements,
+        sp.points_per_element,
+    )
+    want = (
         mp.max_map_elements,
         mp.max_det_elements,
         mp.points_per_element,
-    ):
+    )
+    if shape != want:
         raise ValueError(
-            "data.sample and model disagree on input shape: "
-            f"{sp.max_map_elements}/{sp.max_det_elements}/{sp.points_per_element} "
-            f"vs {mp.max_map_elements}/{mp.max_det_elements}/{mp.points_per_element}"
+            "data.sample and model disagree on input shape "
+            "(map/det/points): "
+            f"{'/'.join(map(str, shape))} vs {'/'.join(map(str, want))}"
+        )
+    if mp.refine_iters < 1:
+        raise ValueError(
+            f"model.refine_iters must be at least 1, got {mp.refine_iters}"
         )
     pp = sp.prior
     # A prior error outside the grid has no correct cell, so the volume loss
@@ -151,7 +171,9 @@ def parse_overrides(items: list[str]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for item in items:
         if "=" not in item:
-            raise ValueError(f"override {item!r} is not of the form section.field=value")
+            raise ValueError(
+                f"override {item!r} is not of the form section.field=value"
+            )
         key, _, value = item.partition("=")
         parts = key.split(".")
         node = out

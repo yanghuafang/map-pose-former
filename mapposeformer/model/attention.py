@@ -19,16 +19,23 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
+# : Additive score for a masked key. Finite, for the reason ``matcher.py``
+# gives: : a row of ``-inf`` softmaxes to NaN, and NaN survives every mask
+# after it.
+_MASK_SCORE = -1e4
+
 
 class FeedForward(nn.Sequential):
     """Standard two-layer MLP with GELU."""
 
     def __init__(self, dim: int, mult: int = 2):
-        super().__init__(nn.Linear(dim, dim * mult), nn.GELU(), nn.Linear(dim * mult, dim))
+        super().__init__(
+            nn.Linear(dim, dim * mult), nn.GELU(), nn.Linear(dim * mult, dim)
+        )
 
 
 class SelfBlock(nn.Module):
-    """Self-attention within one token set: context inside map, or inside detections."""
+    """Self-attention within one set: context inside map, or in detections."""
 
     def __init__(self, dim: int, heads: int, ffn_mult: int = 2):
         super().__init__()
@@ -50,6 +57,7 @@ class CrossBlock(nn.Module):
 
     def __init__(self, dim: int, heads: int, ffn_mult: int = 2):
         super().__init__()
+        self.heads = heads
         self.norm_q = nn.LayerNorm(dim)
         self.norm_kv = nn.LayerNorm(dim)
         self.attn = nn.MultiheadAttention(dim, heads, batch_first=True)
@@ -58,7 +66,9 @@ class CrossBlock(nn.Module):
 
     def forward(self, x: Tensor, y: Tensor, y_pad: Tensor) -> Tensor:
         h = self.norm_kv(y)
-        a, _ = self.attn(self.norm_q(x), h, h, key_padding_mask=y_pad, need_weights=False)
+        a, _ = self.attn(
+            self.norm_q(x), h, h, key_padding_mask=y_pad, need_weights=False
+        )
         x = x + a
         return x + self.ffn(self.norm_ffn(x))
 
@@ -99,12 +109,16 @@ class AttentionPool(nn.Module):
         return out.squeeze(1).masked_fill(empty, 0.0)
 
 
-def prepend_null(x: Tensor, pad: Tensor, token: Tensor) -> tuple[Tensor, Tensor]:
+def prepend_null(
+    x: Tensor, pad: Tensor, token: Tensor
+) -> tuple[Tensor, Tensor]:
     """Prefix a never-masked token, so no attention softmax is ever empty.
 
     Returns the extended ``(x, pad)``; strip with ``x[:, 1:]`` afterwards.
     """
     b = x.shape[0]
     x = torch.cat([token.expand(b, 1, -1), x], dim=1)
-    pad = torch.cat([torch.zeros(b, 1, dtype=torch.bool, device=pad.device), pad], dim=1)
+    pad = torch.cat(
+        [torch.zeros(b, 1, dtype=torch.bool, device=pad.device), pad], dim=1
+    )
     return x, pad

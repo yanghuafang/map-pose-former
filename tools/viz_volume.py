@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Draw a cost surface over the pose grid, in either of its two senses.
 
     tools/viz_volume.py --mode fit               # the fit's own curvature
@@ -49,7 +48,9 @@ _W, _H, _PAD, _TOP = 720, 540, 60, 46
 _TRUNCATE_M = 2.0
 
 
-def oracle_assignment(sample: dict[str, torch.Tensor], radius_m: float) -> torch.Tensor:
+def oracle_assignment(
+    sample: dict[str, torch.Tensor], radius_m: float
+) -> torch.Tensor:
     """The correspondence the labels imply: correct, and available to no model.
 
     Apply the true correction to the detections and take the nearest map point
@@ -59,7 +60,9 @@ def oracle_assignment(sample: dict[str, torch.Tensor], radius_m: float) -> torch
     det = sample["det_pts"].flatten(0, 1)
     mp = sample["map_pts"].flatten(0, 1)
     dist = torch.cdist(G.transform_points(sample["delta"], det), mp)
-    dist = dist.masked_fill(~sample["map_pmask"].flatten(0).unsqueeze(0), float("inf"))
+    dist = dist.masked_fill(
+        ~sample["map_pmask"].flatten(0).unsqueeze(0), float("inf")
+    )
     best, idx = dist.min(dim=1)
 
     assign = torch.zeros(det.shape[0], mp.shape[0])
@@ -74,7 +77,9 @@ def fit_cost(assign, det, mp, cell_t, cell_rot) -> torch.Tensor:
     return (cost / mass.clamp_min(1e-6).unsqueeze(-1)).squeeze(0)
 
 
-def reassociated_cost(det, mp, valid_det, valid_map, cell_t, cell_rot) -> torch.Tensor:
+def reassociated_cost(
+    det, mp, valid_det, valid_map, cell_t, cell_rot
+) -> torch.Tensor:
     """The classical surface: nearest map point, chosen afresh per hypothesis.
 
     Brute force over ``hypotheses x detections x map points``. Affordable here
@@ -87,7 +92,11 @@ def reassociated_cost(det, mp, valid_det, valid_map, cell_t, cell_rot) -> torch.
         torch.cat([cell_t, torch.zeros(len(cell_t), 1)], -1),
         d.unsqueeze(0).expand(len(cell_t), -1, -1),
     )
-    near = torch.cdist(moved, m.unsqueeze(0).expand(len(cell_t), -1, -1)).min(-1).values
+    near = (
+        torch.cdist(moved, m.unsqueeze(0).expand(len(cell_t), -1, -1))
+        .min(-1)
+        .values
+    )
     return near.clamp_max(_TRUNCATE_M).square().mean(-1)
 
 
@@ -108,7 +117,9 @@ def _colour(t: float) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
-def render(prob: torch.Tensor, grid: GridParams, truth, title: str, note: str) -> str:
+def render(
+    prob: torch.Tensor, grid: GridParams, truth, title: str, note: str
+) -> str:
     """``prob`` is ``(num_x, num_y)`` over (forward, left); bright is likely."""
     # Forward up the page and left to the left, which is how anyone looking at
     # a road scene expects to read it.
@@ -120,7 +131,8 @@ def render(prob: torch.Tensor, grid: GridParams, truth, title: str, note: str) -
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{_W}" height="{_H}" '
         f'viewBox="0 0 {_W} {_H}">'
         '<rect width="100%" height="100%" fill="#fff"/>',
-        f'<text x="{_PAD}" y="22" font-family="monospace" font-size="14">{title}</text>',
+        f'<text x="{_PAD}" y="22" font-family="monospace" '
+        f'font-size="14">{title}</text>',
         f'<text x="{_PAD}" y="39" font-family="monospace" font-size="12" '
         f'fill="#5f6368">{note}</text>',
     ]
@@ -131,8 +143,12 @@ def render(prob: torch.Tensor, grid: GridParams, truth, title: str, note: str) -
                 f'width="{cw + 1:.1f}" height="{ch + 1:.1f}" '
                 f'fill="{_colour(float(p[i, j]))}"/>'
             )
-    cx = _PAD + (0.5 - float(truth[1]) / (2 * grid.extent_y_m)) * (_W - 2 * _PAD)
-    cy = _TOP + (0.5 - float(truth[0]) / (2 * grid.extent_x_m)) * (_H - _PAD - _TOP)
+    cx = _PAD + (0.5 - float(truth[1]) / (2 * grid.extent_y_m)) * (
+        _W - 2 * _PAD
+    )
+    cy = _TOP + (0.5 - float(truth[0]) / (2 * grid.extent_x_m)) * (
+        _H - _PAD - _TOP
+    )
     out.append(
         f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="7" fill="none" '
         f'stroke="#3ddc84" stroke-width="3"/>'
@@ -156,8 +172,12 @@ def main() -> int:
     ap.add_argument("--index", type=int, default=30)
     ap.add_argument("--split", default="train")
     ap.add_argument("--out", default="volume.svg")
-    ap.add_argument("--checkpoint", help="use the model's assignment, not the oracle")
-    ap.add_argument("--keep-classes", help="comma-separated LandmarkClass values")
+    ap.add_argument(
+        "--checkpoint", help="use the model's assignment, not the oracle"
+    )
+    ap.add_argument(
+        "--keep-classes", help="comma-separated LandmarkClass values"
+    )
     ap.add_argument("--title")
     ap.add_argument("overrides", nargs="*", help="section.field=value")
     args = ap.parse_args()
@@ -166,7 +186,9 @@ def main() -> int:
     if args.checkpoint:
         from mapposeformer.model import MapPoseFormer
 
-        ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+        ckpt = torch.load(
+            args.checkpoint, map_location="cpu", weights_only=False
+        )
         cfg = ckpt["config"]
         model = MapPoseFormer(cfg.model)
         model.load_state_dict(ckpt["model"])
@@ -185,7 +207,9 @@ def main() -> int:
     # would blur the two surfaces towards each other and hide what differs.
     ax = torch.linspace(-grid.extent_x_m, grid.extent_x_m, grid.num_x)
     ay = torch.linspace(-grid.extent_y_m, grid.extent_y_m, grid.num_y)
-    cell_t = torch.stack(torch.meshgrid(ax, ay, indexing="ij"), -1).reshape(-1, 2)
+    cell_t = torch.stack(torch.meshgrid(ax, ay, indexing="ij"), -1).reshape(
+        -1, 2
+    )
     cell_rot = torch.eye(2).expand(len(cell_t), 2, 2)
 
     map_xy = sample["map_pts"].flatten(0, 1)
@@ -207,7 +231,9 @@ def main() -> int:
         source = "oracle correspondences"
 
     if args.mode == "fit":
-        cost = fit_cost(assign, det_xy.unsqueeze(0), map_xy.unsqueeze(0), cell_t, cell_rot)
+        cost = fit_cost(
+            assign, det_xy.unsqueeze(0), map_xy.unsqueeze(0), cell_t, cell_rot
+        )
         note = "correspondences held fixed -- the curvature of the fit itself"
     else:
         cost = reassociated_cost(
@@ -219,7 +245,8 @@ def main() -> int:
             cell_rot,
         )
         note = (
-            "nearest map point re-chosen at every hypothesis, as a distance transform does"
+            "nearest map point re-chosen at every hypothesis,"
+            " as a distance transform does"
         )
 
     cost = (cost - cost.min()).view(grid.num_x, grid.num_y)
@@ -228,7 +255,8 @@ def main() -> int:
 
     kept = list(cfg.data.sample.keep_classes)
     title = (
-        args.title or f"{args.mode}  |  {source}  |  classes {kept}  |  frame {args.index}"
+        args.title
+        or f"{args.mode}  |  {source}  |  classes {kept}  |  frame {args.index}"
     )
     Path(args.out).write_text(render(prob, grid, sample["delta"], title, note))
 

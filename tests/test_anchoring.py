@@ -17,7 +17,12 @@ import math
 import torch
 
 from mapposeformer.data.sample import SampleParams, build_sample
-from mapposeformer.data.world import World, WorldParams, build_world, chunk_for_map
+from mapposeformer.data.world import (
+    World,
+    WorldParams,
+    build_world,
+    chunk_for_map,
+)
 
 
 def _move_world(world: World, dx: float, dy: float, dyaw: float) -> World:
@@ -27,7 +32,14 @@ def _move_world(world: World, dx: float, dy: float, dyaw: float) -> World:
     traj = world.trajectory.clone()
     traj[:, :2] = traj[:, :2] @ rot.T + torch.tensor([dx, dy])
     traj[:, 2] = traj[:, 2] + dyaw
-    return World(pts=pts, npts=world.npts, cls=world.cls, trajectory=traj)
+    return World(
+        pts=pts,
+        npts=world.npts,
+        cls=world.cls,
+        attr=world.attr,
+        trajectory=traj,
+        params=world.params,
+    )
 
 
 def test_sample_is_unchanged_by_moving_the_whole_world():
@@ -41,7 +53,8 @@ def test_sample_is_unchanged_by_moving_the_whole_world():
     # construction, which is what leaves this test measuring ``build_sample``.
     chunked = chunk_for_map(world, wp.map_chunk_m, wp.step_m)
     moved, moved_chunked = (
-        _move_world(w, dx=5_000.0, dy=-1_200.0, dyaw=1.1) for w in (world, chunked)
+        _move_world(w, dx=5_000.0, dy=-1_200.0, dyaw=1.1)
+        for w in (world, chunked)
     )
 
     sp = SampleParams()
@@ -50,7 +63,14 @@ def test_sample_is_unchanged_by_moving_the_whole_world():
         b = build_sample(moved, moved_chunked, frame, 5, sp)
         for key in ("map_pts", "det_pts", "delta"):
             assert torch.allclose(a[key], b[key], atol=1e-3), key
-        for key in ("map_cls", "det_cls", "map_pmask", "det_pmask"):
+        for key in (
+            "map_cls",
+            "det_cls",
+            "map_attr",
+            "det_attr",
+            "map_pmask",
+            "det_pmask",
+        ):
             assert torch.equal(a[key], b[key]), key
         # The pose itself did move -- otherwise the test would be checking that
         # ``_move_world`` does nothing.

@@ -60,8 +60,8 @@ python -m pip install --index-url "${index}" torch
 python -m pip install -r requirements.txt
 
 if (( deploy )); then
-  # The ONNX path. onnxruntime is what checks the exported graph still
-  # computes the same answer.
+  # M6 needs the ONNX path; tests/test_export.py skips without it. onnxruntime
+  # is what checks the exported graph still computes the same answer.
   python -m pip install onnx onnxscript onnxruntime
   if (( cuda )); then
     # M5 and M6. Both are Linux/CUDA wheels and have no macOS build, which is

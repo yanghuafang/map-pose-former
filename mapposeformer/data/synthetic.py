@@ -32,7 +32,8 @@ class SyntheticDataset(Dataset):
         self._epoch = 0
         self._cache: dict[int, tuple[World, World]] = {}
         probe, _ = self._world(0)
-        lo, hi = params.edge_margin, probe.trajectory.shape[0] - params.edge_margin
+        lo = params.edge_margin
+        hi = probe.trajectory.shape[0] - params.edge_margin
         self._frames = list(range(lo, hi, params.frame_stride))
 
     def set_epoch(self, epoch: int) -> None:
@@ -56,7 +57,9 @@ class SyntheticDataset(Dataset):
         """
         if scene not in self._cache:
             world = build_world(self.base + scene, self.p.world)
-            chunked = chunk_for_map(world, self.p.world.map_chunk_m, self.p.world.step_m)
+            chunked = chunk_for_map(
+                world, self.p.world.map_chunk_m, self.p.world.step_m
+            )
             self._cache[scene] = (world, chunked)
         return self._cache[scene]
 

@@ -17,9 +17,8 @@ squared error is a quadratic in the hypothesis, so the whole grid follows in
 closed form from the same statistics :mod:`~mapposeformer.model.pose_head`
 already forms to solve for the pose. See :func:`grid_cost`.
 
-The grid extent must match the prior's truncation bounds. A target outside the
-grid has no correct cell, and the loss would be asking for something the head
-cannot represent.
+The grid extent must match the prior's truncation bounds, which
+``config._validate`` enforces and explains.
 """
 
 from __future__ import annotations
@@ -147,24 +146,34 @@ class VolumeHead(nn.Module):
                 grid.num_yaw,
             ),
         )
-        cells = torch.stack(torch.meshgrid(*axes, indexing="ij"), dim=-1).reshape(-1, 3)
+        cells = torch.stack(
+            torch.meshgrid(*axes, indexing="ij"), dim=-1
+        ).reshape(-1, 3)
         self.register_buffer("cells", cells, persistent=False)
         # The same hypotheses as rotation matrices and translations, because
         # that is the form the closed form wants and rebuilding them per step
         # would be trigonometry in the inner loop.
         c, s = torch.cos(cells[:, 2]), torch.sin(cells[:, 2])
-        rot = torch.stack([torch.stack([c, -s], -1), torch.stack([s, c], -1)], -2)
-        self.register_buffer("cell_t", cells[:, :2].contiguous(), persistent=False)
+        rot = torch.stack(
+            [torch.stack([c, -s], -1), torch.stack([s, c], -1)], -2
+        )
+        self.register_buffer(
+            "cell_t", cells[:, :2].contiguous(), persistent=False
+        )
         self.register_buffer("cell_rot", rot, persistent=False)
         # Cell pitch per axis, in that axis's own units. The volume loss needs
         # it to size its soft target, and deriving it there would mean an
         # ``unique()`` over the whole grid on every step.
         self.register_buffer(
             "pitch",
-            torch.tensor([float(a[1] - a[0]) if len(a) > 1 else 1.0 for a in axes]),
+            torch.tensor(
+                [float(a[1] - a[0]) if len(a) > 1 else 1.0 for a in axes]
+            ),
             persistent=False,
         )
-        self.register_buffer("min_var", torch.tensor(min_std).square(), persistent=False)
+        self.register_buffer(
+            "min_var", torch.tensor(min_std).square(), persistent=False
+        )
 
     def forward(
         self,

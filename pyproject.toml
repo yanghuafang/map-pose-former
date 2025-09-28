@@ -7,16 +7,38 @@ requires-python = ">=3.10"
 [tool.setuptools.packages.find]
 include = ["mapposeformer*"]
 
+# Google Python Style Guide, enforced where a linter can. The 80-column limit
+# is the guide's, and it is the same one .clang-format sets for the C++ that
+# arrives with the TensorRT backend -- one number for both languages, so a
+# diff never has to explain which half of the repository it is in.
 [tool.ruff]
-line-length = 92
+line-length = 80
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
-ignore = [
-  "E731",  # a lambda is the clearest way to write the block table in model.py
-  "B008",  # dataclass field(default_factory=...) reads as a call in a default
+select = [
+  "E",    # pycodestyle
+  "F",    # pyflakes
+  "I",    # import order -- the guide's grouping: stdlib, third party, local
+  "N",    # pep8-naming, which is the guide's naming section
+  "UP",   # pyupgrade
+  "B",    # bugbear
+  "SIM",  # simplify
+  "RUF",
 ]
+ignore = [
+  "B008",  # dataclass field(default_factory=...) reads as a call in a default
+  "E741",  # `l` is the map-point axis in the matcher, next to `k` for detections
+  "N812",  # `torch.nn.functional as F` is universal in PyTorch, docs included
+  "RUF001",  # `19 x 17 x 13` reads worse than `19 × 17 × 13`, and the docs use
+  "RUF002",  # the multiplication sign too -- tests/test_docs.py matches on it
+]
+
+[tool.ruff.lint.pep8-naming]
+# Tensor dimensions are named after the einsum indices they carry, and B, K, L
+# are the ones this project uses everywhere. Renaming them to lower case would
+# make the code disagree with every docstring and every paper it follows.
+ignore-names = ["B", "K", "L", "G", "D", "M", "N", "P", "E", "Q", "R", "T", "W"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -55,8 +55,12 @@ def weighted_procrustes_se2(
 
     # The 2-D case of the SVD in general Kabsch collapses to one atan2: the
     # optimal rotation angle is the argument of the weighted cross/dot pair.
-    cross = (w.squeeze(-1) * (a[..., 0] * b[..., 1] - a[..., 1] * b[..., 0])).sum(1)
-    dot = (w.squeeze(-1) * (a[..., 0] * b[..., 0] + a[..., 1] * b[..., 1])).sum(1)
+    cross = (
+        w.squeeze(-1) * (a[..., 0] * b[..., 1] - a[..., 1] * b[..., 0])
+    ).sum(1)
+    dot = (w.squeeze(-1) * (a[..., 0] * b[..., 0] + a[..., 1] * b[..., 1])).sum(
+        1
+    )
     # atan2 is undefined at the origin and its gradient is unbounded near it,
     # which is exactly the degenerate case -- all weight on one point, so no
     # rotation is observable. Fall back to zero rotation there rather than
@@ -137,7 +141,11 @@ class ProcrustesPoseHead(nn.Module):
                 # Geman-McClure: weight falls off as the residual grows and
                 # reaches zero only in the limit, so no correspondence is ever
                 # discarded discontinuously and the gradient stays smooth.
-                r = (G.transform_points(pose, det_pts) - target).square().sum(-1)
+                r = (
+                    (G.transform_points(pose, det_pts) - target)
+                    .square()
+                    .sum(-1)
+                )
                 pose, mass = weighted_procrustes_se2(
                     det_pts, target, w * scale_sq / (scale_sq + r)
                 )
@@ -155,7 +163,9 @@ class RegressionPoseHead(nn.Module):
 
     def __init__(self, dim: int, extent: tuple[float, float, float]):
         super().__init__()
-        self.mlp = nn.Sequential(nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, 3))
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, 3)
+        )
         self.register_buffer("extent", torch.tensor(extent), persistent=False)
 
     def forward(self, global_feat: Tensor) -> Tensor:

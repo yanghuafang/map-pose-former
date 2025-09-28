@@ -1,4 +1,5 @@
-"""SE(2) algebra. Cheap to test, and everything downstream is wrong without it."""
+"""SE(2) algebra. Cheap to test, and everything downstream is wrong without
+it."""
 
 import math
 
@@ -34,7 +35,7 @@ def test_transform_points_agrees_with_compose():
 
 
 def test_wrap_angle_is_continuous_across_the_branch_cut():
-    """+179 deg and -181 deg are the same error and must wrap to the same value."""
+    """+179 deg and -181 deg are one error, and must wrap to one value."""
     a = G.wrap_angle(torch.tensor(math.radians(179.0)))
     b = G.wrap_angle(torch.tensor(math.radians(-181.0)))
     assert abs(float(a - b)) < 1e-6

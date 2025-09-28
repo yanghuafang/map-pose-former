@@ -22,7 +22,7 @@ so — [OPEN_ITEMS.md](docs/OPEN_ITEMS.md).
 
 ```bash
 ./scripts/setup.sh        # venv + CPU torch
-./scripts/ci.sh           # 28 tests
+./scripts/ci.sh           # format, lint, tests
 ./scripts/run_smoke.sh    # train, evaluate, and draw a frame
 ```
 

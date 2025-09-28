@@ -173,7 +173,7 @@ prologue+="; . scripts/env.sh && mpf_activate"
 
 # A login shell, so the command starts from the PATH the host's profile builds
 # -- CUDA and any pyenv/conda shims live there and `ssh host cmd` reads no
-# profile at all. The conda environment is activated if setup.sh made
-# one; scripts/env.sh is a no-op when it did not.
+# profile at all. The conda environment is activated if setup.sh made one;
+# scripts/env.sh is a no-op when it did not.
 exec ssh ${tty_flag[@]+"${tty_flag[@]}"} "${REMOTE_HOST}" \
   "bash -lc '${prologue}; ${remote_cmd}'"

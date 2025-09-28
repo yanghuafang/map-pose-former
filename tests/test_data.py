@@ -9,20 +9,20 @@ from mapposeformer import geometry as G
 from mapposeformer.data import DataParams, SyntheticDataset, build_world
 from mapposeformer.data.classes import NUM_CLASSES, LandmarkClass
 
-#: Frames the invariant is checked on. Spread across scenes rather than
-#: consecutive, so a single malformed world cannot pass by being outvoted.
+# : Frames the invariant is checked on. Spread across scenes rather than
+# : consecutive, so a single malformed world cannot pass by being outvoted.
 FRAMES = range(0, 2000, 97)
 
 
 def test_world_contains_every_class():
-    """A world missing a class would make the ablation experiment meaningless."""
+    """A world missing a class makes the ablation experiment meaningless."""
     world = build_world(0)
     present = {int(c) for c in world.cls}
     assert present == set(range(NUM_CLASSES))
 
 
 def test_padding_is_never_a_phantom_landmark():
-    """Points past ``npts`` repeat the last real point, never sit at the origin."""
+    """Points past ``npts`` repeat the last real point, never the origin."""
     world = build_world(3)
     for i in range(len(world)):
         n = int(world.npts[i])
@@ -68,11 +68,15 @@ def _distance_to_map(pts: Tensor, map_pts: Tensor, map_pmask: Tensor) -> Tensor:
         b.append(q[1:] if q.shape[0] > 1 else q)
     a, b = torch.cat(a), torch.cat(b)
     d = b - a
-    t = (((pts[:, None] - a) * d).sum(-1) / d.square().sum(-1).clamp_min(1e-9)).clamp(0, 1)
+    t = (
+        ((pts[:, None] - a) * d).sum(-1) / d.square().sum(-1).clamp_min(1e-9)
+    ).clamp(0, 1)
     return (pts[:, None] - (a + t[..., None] * d)).norm(dim=-1).min(-1).values
 
 
-def _inlier_frac(sample: dict[str, Tensor], delta: Tensor, radius: float = 1.0) -> Tensor:
+def _inlier_frac(
+    sample: dict[str, Tensor], delta: Tensor, radius: float = 1.0
+) -> Tensor:
     """Fraction of detected points landing within ``radius`` of the map.
 
     The statistic and the radius the matching loss uses to decide which
@@ -98,7 +102,9 @@ def test_true_correction_aligns_detections_onto_the_map():
     frames is 0.86, so 0.75 fails on a broken label rather than on noise.
     """
     ds = SyntheticDataset(DataParams(), "train")
-    frac = torch.stack([_inlier_frac(s, s["delta"]) for s in (ds[i] for i in FRAMES)])
+    frac = torch.stack(
+        [_inlier_frac(s, s["delta"]) for s in (ds[i] for i in FRAMES)]
+    )
     assert frac.mean() > 0.75, f"mean inlier fraction {float(frac.mean()):.3f}"
 
 
@@ -130,9 +136,14 @@ def test_true_correction_beats_a_wrong_one():
         ("yaw -3 deg", (0.0, 0.0, -math.radians(3.0))),
     ):
         wrong = torch.stack(
-            [_inlier_frac(s, s["delta"] + torch.tensor(offset)) for s in samples]
+            [
+                _inlier_frac(s, s["delta"] + torch.tensor(offset))
+                for s in samples
+            ]
         ).mean()
-        assert true > wrong + 0.15, f"{name}: true {true:.3f} vs wrong {wrong:.3f}"
+        assert true > wrong + 0.15, (
+            f"{name}: true {true:.3f} vs wrong {wrong:.3f}"
+        )
 
 
 def test_splits_never_share_geometry():
@@ -150,3 +161,89 @@ def test_class_ablation_removes_the_class():
     s = SyntheticDataset(p, "train")[30]
     present = {int(c) for c in s["map_cls"][s["map_pmask"].any(-1)]}
     assert present <= set(keep)
+
+
+def _element_lengths(sample, prefix, attr):
+    """End-to-end length of every multi-point element of one paint style."""
+    out = []
+    for e in range(sample[f"{prefix}_pts"].shape[0]):
+        m = sample[f"{prefix}_pmask"][e]
+        if int(m.sum()) < 2 or int(sample[f"{prefix}_attr"][e]) != int(attr):
+            continue
+        q = sample[f"{prefix}_pts"][e][m]
+        out.append(float((q[-1] - q[0]).norm()))
+    return out
+
+
+def test_dashed_lines_reach_the_detector_as_stripes():
+    """The map stores an attribute; the detector sees paint.
+
+    That asymmetry is the whole point of ``MarkType``. A stripe end is
+    along-track evidence, and a real vector map throws it away by storing one
+    continuous polyline -- so if both sides were striped, or neither, the
+    attribute would have nothing to be about.
+    """
+    from mapposeformer.data.classes import MarkType
+
+    ds = SyntheticDataset(DataParams(), "train")
+    det = {MarkType.SOLID: [], MarkType.DASHED: []}
+    mp = {MarkType.SOLID: [], MarkType.DASHED: []}
+    for s in (ds[i] for i in FRAMES):
+        for a in det:
+            det[a] += _element_lengths(s, "det", a)
+            mp[a] += _element_lengths(s, "map", a)
+
+    def mean(values):
+        return float(torch.tensor(values).mean())
+
+    assert mean(det[MarkType.DASHED]) < 4.0, "dashed detections are not stripes"
+    assert mean(det[MarkType.SOLID]) > 3 * mean(det[MarkType.DASHED])
+    # The map is never striped. A dashed element there is a chunk like any
+    # other, which is exactly what makes the attribute the only clue.
+    assert abs(mean(mp[MarkType.DASHED]) - mean(mp[MarkType.SOLID])) < 1.0
+
+
+def test_detector_confidence_is_evidence_and_not_a_label():
+    """Clutter scores lower than truth on average, and the two overlap.
+
+    A score that separated them would be solving the problem the model is
+    being asked to solve, and every number downstream would be measuring a
+    dataset that told it the answer.
+    """
+    ds = SyntheticDataset(DataParams(), "train")
+    conf = torch.cat(
+        [s["det_conf"][s["det_pmask"].any(-1)] for s in (ds[i] for i in FRAMES)]
+    )
+    assert float(conf.min()) >= 0.0 and float(conf.max()) <= 1.0
+    # Both regimes are populated: all-high would mean the field says nothing.
+    assert float((conf < 0.6).float().mean()) > 0.05
+    assert float((conf > 0.7).float().mean()) > 0.3
+
+
+def test_reported_uncertainty_tracks_the_noise_it_describes():
+    """A detector reports a covariance, and it is an estimate rather than the
+    realisation.
+
+    Truthful in expectation -- a distant detection must claim more uncertainty
+    than a near one, because it has more -- and wrong on any individual element,
+    because an exact covariance would hand the model the noise draw instead of
+    the noise model.
+    """
+    from mapposeformer.data.sample import PerceptionParams
+
+    pp = PerceptionParams()
+    ds = SyntheticDataset(DataParams(), "train")
+    near, far = [], []
+    for s in (ds[i] for i in FRAMES):
+        keep = s["det_pmask"].any(-1)
+        rng = s["det_pts"][:, 0].norm(dim=-1)[keep]
+        point_sigma = s["det_sigma"][keep][:, 0]
+        near += point_sigma[rng < 15].tolist()
+        far += point_sigma[rng > 35].tolist()
+
+    near, far = torch.tensor(near), torch.tensor(far)
+    assert float(far.mean()) > float(near.mean()), "range must cost confidence"
+    # ...and it is not simply the true value handed over.
+    truth = pp.point_sigma_m + pp.range_sigma_frac * 10.0
+    assert float((near - truth).abs().mean()) > 0.01, "reported sigma is exact"
+    assert float(near.min()) > 0.0

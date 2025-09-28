@@ -60,8 +60,12 @@ class SoftMatcher(nn.Module):
         invalid = pad_a.unsqueeze(2) | pad_b.unsqueeze(1)
         scores = scores.masked_fill(invalid, _MASK_SCORE)
 
-        sa = torch.sigmoid(self.matchability(fa)).masked_fill(pad_a.unsqueeze(-1), 0.0)
-        sb = torch.sigmoid(self.matchability(fb)).masked_fill(pad_b.unsqueeze(-1), 0.0)
+        sa = torch.sigmoid(self.matchability(fa)).masked_fill(
+            pad_a.unsqueeze(-1), 0.0
+        )
+        sb = torch.sigmoid(self.matchability(fb)).masked_fill(
+            pad_b.unsqueeze(-1), 0.0
+        )
 
         assign = F.softmax(scores, dim=2) * F.softmax(scores, dim=1)
         assign = assign * sa * sb.transpose(1, 2)

@@ -1,16 +1,29 @@
 # The distillation teacher: wider, deeper, and given more of the map to look at.
-# Not meant for deployment -- meant to be the thing the student is compressed
-# towards. See docs/ROADMAP.md.
+# ~26M parameters against the student's 2.3M.
+#
+# Two jobs, not one. It is what the student is distilled *from*, and it is also
+# the model the compression milestone is measured *on*: at 2.3M parameters over
+# ~1400 tokens the student is bound by kernel launches rather than arithmetic,
+# so INT8 and 2:4 sparsity have almost nothing to bite on. Reporting only that
+# would teach the technique badly. The teacher is where the numbers move; the
+# student is the control that shows where they stop paying. See docs/ROADMAP.md.
 data:
   num_scenes: {train: 2000, val: 60, test: 120}
 model:
   dim: 256
   num_layers: 8
-  num_heads: 8
+  # head_dim 64 rather than the student's 32: twice the width buys it without
+  # losing head count. See configs/synth_base.yaml for why 32 is too small.
+  num_heads: 4
   ffn_mult: 4
 train:
   epochs: 60
-  batch_size: 48
+  # 40, so this trains on a 24 GiB card rather than only on the 48 GiB one it
+  # was developed on. **Reserved** is what must fit, not allocated: at 0.44 GiB
+  # of activations per sample, 48 is 21.2 GiB allocated but 23.0 GiB reserved,
+  # which is 96% of a 24 GiB card. 40 is 19.2 GiB. Throughput flattens well
+  # before either, so this is portability bought for nothing.
+  batch_size: 40
   lr: 2.0e-4
   num_workers: 10
   amp: bf16

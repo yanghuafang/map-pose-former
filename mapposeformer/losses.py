@@ -89,7 +89,9 @@ def pose_loss(deltas: Tensor, gt: Tensor, p: LossParams) -> Tensor:
         r, torch.zeros_like(r), delta=p.huber_delta_m, reduction="none"
     ).mean(dim=(0, 2))
     i = deltas.shape[1]
-    w = p.refine_gamma ** torch.arange(i - 1, -1, -1, device=r.device, dtype=r.dtype)
+    w = p.refine_gamma ** torch.arange(
+        i - 1, -1, -1, device=r.device, dtype=r.dtype
+    )
     return (w * per_pass).sum() / w.sum()
 
 
@@ -175,7 +177,9 @@ def covariance_loss(cov: Tensor, pred: Tensor, gt: Tensor) -> Tensor:
     return 0.5 * (whitened.squeeze(-1).square().sum(-1) + logdet).mean()
 
 
-def trust_loss(trust_logit: Tensor, pred: Tensor, gt: Tensor, p: LossParams) -> Tensor:
+def trust_loss(
+    trust_logit: Tensor, pred: Tensor, gt: Tensor, p: LossParams
+) -> Tensor:
     """Teach the model to predict its own success.
 
     The target is derived from the model's own detached error, which makes this
@@ -186,7 +190,8 @@ def trust_loss(trust_logit: Tensor, pred: Tensor, gt: Tensor, p: LossParams) -> 
     with torch.no_grad():
         e = G.relative(gt, pred.detach())
         ok = (e[:, :2].norm(dim=-1) <= p.trust_tol_m) & (
-            e[:, 2].abs() <= torch.deg2rad(torch.tensor(p.trust_tol_deg, device=e.device))
+            e[:, 2].abs()
+            <= torch.deg2rad(torch.tensor(p.trust_tol_deg, device=e.device))
         )
     return F.binary_cross_entropy_with_logits(trust_logit, ok.float())
 
@@ -205,7 +210,13 @@ def compute_losses(
     lm, matched = match_loss(out, batch, p)
     lc = covariance_loss(out["cov"], out["delta"], gt)
     lt = trust_loss(out["trust_logit"], out["delta"], gt, p)
-    total = p.w_pose * lp + p.w_volume * lv + p.w_match * lm + p.w_cov * lc + p.w_trust * lt
+    total = (
+        p.w_pose * lp
+        + p.w_volume * lv
+        + p.w_match * lm
+        + p.w_cov * lc
+        + p.w_trust * lt
+    )
     return total, {
         "loss": float(total.detach()),
         "pose": float(lp.detach()),

@@ -92,7 +92,9 @@ class Calibration:
     def update(self, pred: Tensor, gt: Tensor, cov: Tensor) -> None:
         e = pose_error(pred.detach(), gt.detach()).double().unsqueeze(-1)
         chol = torch.linalg.cholesky(cov.detach().double())
-        whitened = torch.linalg.solve_triangular(chol, e, upper=False).squeeze(-1)
+        whitened = torch.linalg.solve_triangular(chol, e, upper=False).squeeze(
+            -1
+        )
         nees = whitened.square().sum(-1)
         self.n += int(nees.shape[0])
         self._nees_sum += float(nees.sum())
@@ -150,11 +152,19 @@ class ErrorSummary:
     """
 
     n: int = 0
-    _sum: Tensor = field(default_factory=lambda: torch.zeros(3, dtype=torch.float64))
-    _sumsq: Tensor = field(default_factory=lambda: torch.zeros(3, dtype=torch.float64))
-    _maxabs: Tensor = field(default_factory=lambda: torch.zeros(3, dtype=torch.float64))
+    _sum: Tensor = field(
+        default_factory=lambda: torch.zeros(3, dtype=torch.float64)
+    )
+    _sumsq: Tensor = field(
+        default_factory=lambda: torch.zeros(3, dtype=torch.float64)
+    )
+    _maxabs: Tensor = field(
+        default_factory=lambda: torch.zeros(3, dtype=torch.float64)
+    )
     _trans_sq: float = 0.0
-    _recall: Tensor = field(default_factory=lambda: torch.zeros(3, dtype=torch.float64))
+    _recall: Tensor = field(
+        default_factory=lambda: torch.zeros(3, dtype=torch.float64)
+    )
 
     #: Success thresholds, as ``(translation_m, yaw_deg)``. A frame counts
     # only : if it meets both: a pose that is 10 cm out but 5 degrees off is

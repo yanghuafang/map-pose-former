@@ -26,10 +26,10 @@ from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mapposeformer.config import load_config, parse_overrides  # noqa: E402
-from mapposeformer.data.synthetic import SyntheticDataset  # noqa: E402
-from mapposeformer.losses import compute_losses  # noqa: E402
-from mapposeformer.model.model import MapPoseFormer  # noqa: E402
+from mapposeformer.config import load_config, parse_overrides
+from mapposeformer.data.synthetic import SyntheticDataset
+from mapposeformer.losses import compute_losses
+from mapposeformer.model.model import MapPoseFormer
 
 
 def _sync(device: str) -> None:
@@ -51,8 +51,12 @@ def _time(fn, device: str, iters: int, warmup: int = 5) -> float:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--config", help="YAML config; omit for the dataclass defaults")
-    ap.add_argument("--batches", type=int, default=30, help="batches per section")
+    ap.add_argument(
+        "--config", help="YAML config; omit for the dataclass defaults"
+    )
+    ap.add_argument(
+        "--batches", type=int, default=30, help="batches per section"
+    )
     ap.add_argument("overrides", nargs="*", help="section.field=value")
     args = ap.parse_args()
 
@@ -94,16 +98,19 @@ def main() -> int:
 
     miss_s = _time(one_miss, "cpu", 20)
     for name, sec in (("cached scene", hit), ("new scene", miss_s)):
-        print(f"one sample, {name:14s}{sec * 1e3:6.2f} ms   ({1 / sec:5.0f}/s/worker)")
+        print(
+            f"one sample, {name:14s}{sec * 1e3:6.2f} ms"
+            f"   ({1 / sec:5.0f}/s/worker)"
+        )
     print(f"{per_scene} frames per scene, {len(probe)} frames total\n")
 
     # --- data alone: drain the loader, touch nothing else ------------------
     # Twice, because the dataset caches scenes and the two passes are the two
-    # regimes a run actually spends time in: the first epoch, which builds every
-    # scene it touches, and every epoch after it, which does not. Reporting only
-    # the cold number would understate a 40-epoch run by more than a factor of
-    # two; reporting only the warm one would promise a first epoch that does not
-    # arrive.
+    # regimes a run actually spends time in: the first epoch, which builds
+    # every scene it touches, and every epoch after it, which does not.
+    # Reporting only the cold number would understate a 40-epoch run by more
+    # than a factor of two; reporting only the warm one would promise a first
+    # epoch that does not arrive.
     def drain(n_batches: int):
         it = iter(loader)
         last = next(it)  # worker startup is not throughput
@@ -136,17 +143,44 @@ def main() -> int:
     def step():
         with ctx:
             out = model(batch)
-            total, _ = compute_losses(out, batch, volume.cells, volume.pitch, cfg.loss)
+            total, _ = compute_losses(
+                out, batch, volume.cells, volume.pitch, cfg.loss
+            )
         total.backward()
         model.zero_grad(set_to_none=True)
 
+    # Peak VRAM over one optimizer step, which is what has to fit. Measured
+    # after a warm-up step so the allocator has stopped growing, and reported
+    # as *allocated* rather than reserved: reserved is the caching allocator's
+    # high-water mark and says more about fragmentation than about the model.
+    peak_alloc = peak_reserved = 0.0
+    if device.startswith("cuda"):
+        step()
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+        step()
+        torch.cuda.synchronize()
+        peak_alloc = torch.cuda.max_memory_allocated() / 2**30
+        peak_reserved = torch.cuda.max_memory_reserved() / 2**30
+
     fwd = _time(forward, device, args.batches)
     fwd_bwd = _time(step, device, args.batches)
+    if device.startswith("cuda"):
+        params = sum(p.numel() for p in model.parameters())
+        print(
+            f"model, {params / 1e6:.1f}M params, batch {bs}: "
+            f"{peak_alloc:.2f} GiB allocated, {peak_reserved:.2f} GiB reserved"
+        )
     for name, sec in (("forward only", fwd), ("forward + backward", fwd_bwd)):
-        print(f"{name:20s} {bs / sec:8.0f} frames/s   ({sec * 1e3:7.1f} ms/batch)")
+        print(
+            f"{name:20s} {bs / sec:8.0f} frames/s   ({sec * 1e3:7.1f} ms/batch)"
+        )
 
     limit = "data" if data_fps < bs / fwd_bwd else "model"
-    print(f"\nsteady state is {limit}-bound: {min(data_fps, bs / fwd_bwd):.0f} frames/s")
+    print(
+        f"\nsteady state is {limit}-bound:"
+        f" {min(data_fps, bs / fwd_bwd):.0f} frames/s"
+    )
     return 0
 
 

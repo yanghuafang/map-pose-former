@@ -2,8 +2,9 @@
 
 # lib.sh -- shared by the dataset download scripts.
 #
-# Not sourced by anything else. Two scripts wanting the same preflight is
-# reason enough for one file; a third would be reason to keep it.
+# Sourced by download_nuscenes.sh and download_argoverse2.sh, and nothing else.
+# Two callers would be thin justification for a shared file; 200 lines of
+# resumable parallel-range fetching, identical for both, is not.
 
 #: Where every dataset lands. Absolute, on the data drive, and deliberately
 #: outside the checkout: scripts/remote-ubuntu.sh --sync runs rsync --delete

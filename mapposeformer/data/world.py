@@ -23,7 +23,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from mapposeformer.data.classes import LandmarkClass
+from mapposeformer.data.classes import LandmarkClass, MarkType
 
 
 @dataclass(frozen=True)
@@ -60,6 +60,17 @@ class WorldParams:
     lateral_jitter_m: float = 0.35
     """Placement noise on roadside furniture, so poles are not on a perfect
     line the model could regress from lateral offset alone."""
+    dashed_frac: float = 0.6
+    """Fraction of interior lane dividers painted dashed rather than solid.
+    Road boundaries are always solid. The map stores only the attribute; the
+    stripes themselves reach the model through the detector -- see
+    :class:`~mapposeformer.data.classes.MarkType`."""
+    stripe_m: float = 3.0
+    """Painted length of one dash. Its *ends* are the along-track evidence."""
+    gap_m: float = 6.0
+    """Unpainted length between dashes. UK and US practice both sit near a
+    1:2 ratio, and the absolute pitch matters here: at 9 m a 50 m frustum sees
+    about five stripe ends, which is what makes them worth storing."""
 
 
 @dataclass
@@ -78,13 +89,21 @@ class World:
             mask degrades quietly rather than exploding -- which is why tests
             check it explicitly.
         cls: ``(E,)`` :class:`LandmarkClass` value per element.
+        attr: ``(E,)`` :class:`MarkType` value per element -- the paint style,
+            which is what a real vector map stores instead of the stripes.
         trajectory: ``(T, 3)`` ground-truth vehicle poses along the road.
+        params: The shape this world was generated from. Carried because the
+            stripe pitch is needed downstream, where the detector turns a
+            dashed line back into paint, and threading it separately would let
+            a world and a pitch disagree.
     """
 
     pts: Tensor
     npts: Tensor
     cls: Tensor
+    attr: Tensor
     trajectory: Tensor
+    params: WorldParams
 
     def __len__(self) -> int:
         return int(self.cls.shape[0])
@@ -108,7 +127,9 @@ def _centreline(p: WorldParams, gen: torch.Generator) -> tuple[Tensor, Tensor]:
             kappa = 0.0
         else:
             sign = 1.0 if torch.rand(1, generator=gen).item() < 0.5 else -1.0
-            radius = p.min_radius_m * (1.0 + 3.0 * torch.rand(1, generator=gen).item())
+            radius = p.min_radius_m * (
+                1.0 + 3.0 * torch.rand(1, generator=gen).item()
+            )
             kappa = sign / radius
         for _ in range(min(seg, n - 1 - i)):
             xy[i + 1, 0] = xy[i, 0] + p.step_m * math.cos(yaw)
@@ -126,40 +147,85 @@ def _offset(xy: Tensor, head: Tensor, lateral_m: float) -> Tensor:
     return xy + lateral_m * normal
 
 
-def _milestones(length_m: float, mean_gap_m: float, gen: torch.Generator) -> list[float]:
+def _milestones(
+    length_m: float, mean_gap_m: float, gen: torch.Generator
+) -> list[float]:
     """Arclength positions of Poisson-spaced roadside features."""
     out, s = [], float(torch.rand(1, generator=gen).item()) * mean_gap_m
     while s < length_m:
         out.append(s)
-        gap = -mean_gap_m * math.log(max(1e-6, float(torch.rand(1, generator=gen).item())))
+        gap = -mean_gap_m * math.log(
+            max(1e-6, float(torch.rand(1, generator=gen).item()))
+        )
         s += max(0.25 * mean_gap_m, gap)
     return out
+
+
+def _pack_elements(
+    elements: list[tuple[int, int, Tensor]],
+    trajectory: Tensor,
+    params: WorldParams,
+) -> World:
+    """Pad a list of ``(class, attribute, points)`` into a :class:`World`.
+
+    Tail padding repeats the last real point rather than sitting at the origin,
+    so code that forgets ``npts`` degrades quietly into a duplicated point
+    instead of inventing a landmark at the world origin.
+    """
+    max_pts = max(e.shape[0] for _, _, e in elements)
+    pts = torch.zeros(len(elements), max_pts, 2)
+    npts = torch.zeros(len(elements), dtype=torch.long)
+    cls = torch.zeros(len(elements), dtype=torch.long)
+    attr = torch.zeros(len(elements), dtype=torch.long)
+    for i, (c, a, e) in enumerate(elements):
+        pts[i, : e.shape[0]] = e
+        pts[i, e.shape[0] :] = e[-1]
+        npts[i] = e.shape[0]
+        cls[i] = int(c)
+        attr[i] = int(a)
+    return World(
+        pts=pts,
+        npts=npts,
+        cls=cls,
+        attr=attr,
+        trajectory=trajectory,
+        params=params,
+    )
 
 
 def build_world(seed: int, p: WorldParams | None = None) -> World:
     """Generate one scene, reproducibly.
 
-    Args:
-        seed: The scene identity. Train/val/test are disjoint seed ranges, so
-            no geometry is ever shared across splits -- the synthetic analogue
-            of the geographic split the real-data milestone needs.
-        p: Road shape; defaults to :class:`WorldParams`.
+    @param seed The scene identity. Train/val/test are disjoint seed ranges, so
+        no geometry is ever shared across splits -- the synthetic analogue of
+        the geographic split the real-data milestone needs.
+    @param p Road shape; defaults to :class:`WorldParams`.
     """
     p = p or WorldParams()
     gen = torch.Generator().manual_seed(seed)
     xy, head = _centreline(p, gen)
     half_road = 0.5 * p.num_lanes * p.lane_width_m
 
-    elements: list[tuple[int, Tensor]] = []
+    elements: list[tuple[int, int, Tensor]] = []
 
     # --- Along-road geometry: dividers between lanes, boundaries at the edges.
-    # Continuous, full length. Chunking is a property of the stored map, not of
-    # the road.
+    # Continuous, full length, whatever the paint style: chunking and striping
+    # are both properties of a *representation* of the road, not of the road.
     for k in range(1, p.num_lanes):
         lat = half_road - k * p.lane_width_m
-        elements.append((LandmarkClass.LANE_DIVIDER, _offset(xy, head, lat)))
+        dashed = torch.rand(1, generator=gen).item() < p.dashed_frac
+        mark = MarkType.DASHED if dashed else MarkType.SOLID
+        elements.append(
+            (LandmarkClass.LANE_DIVIDER, mark, _offset(xy, head, lat))
+        )
     for lat in (half_road, -half_road):
-        elements.append((LandmarkClass.ROAD_BOUNDARY, _offset(xy, head, lat)))
+        elements.append(
+            (
+                LandmarkClass.ROAD_BOUNDARY,
+                MarkType.SOLID,
+                _offset(xy, head, lat),
+            )
+        )
 
     # --- Roadside furniture: single points, the strongest along-track evidence.
     def _at(s: float) -> tuple[Tensor, Tensor]:
@@ -173,9 +239,17 @@ def build_world(seed: int, p: WorldParams | None = None) -> World:
         for s in _milestones(p.length_m, spacing, gen):
             c, h = _at(s)
             side = 1.0 if torch.rand(1, generator=gen).item() < 0.5 else -1.0
-            jit = p.lateral_jitter_m * float(torch.randn(1, generator=gen).item())
+            jit = p.lateral_jitter_m * float(
+                torch.randn(1, generator=gen).item()
+            )
             n = torch.stack([-torch.sin(h), torch.cos(h)])
-            elements.append((cls, (c + side * (half_road + extra + jit) * n).view(1, 2)))
+            elements.append(
+                (
+                    cls,
+                    MarkType.NONE,
+                    (c + side * (half_road + extra + jit) * n).view(1, 2),
+                )
+            )
 
     # --- Intersections: the only features perpendicular to travel.
     for s in _milestones(p.length_m, p.intersection_spacing_m, gen):
@@ -186,25 +260,21 @@ def build_world(seed: int, p: WorldParams | None = None) -> World:
         # a few metres further on. That asymmetry is real and it is also useful:
         # the two give slightly different lateral evidence at the same station.
         span = torch.linspace(-half_road, 0.0, 5).unsqueeze(-1)
-        elements.append((LandmarkClass.STOP_LINE, c + span * n))
+        elements.append((LandmarkClass.STOP_LINE, MarkType.NONE, c + span * n))
         span = torch.linspace(-half_road, half_road, 9).unsqueeze(-1)
-        elements.append((LandmarkClass.PED_CROSSING, c + 4.0 * fwd + span * n))
+        elements.append(
+            (
+                LandmarkClass.PED_CROSSING,
+                MarkType.NONE,
+                c + 4.0 * fwd + span * n,
+            )
+        )
 
-    max_pts = max(e.shape[0] for _, e in elements)
-    pts = torch.zeros(len(elements), max_pts, 2)
-    npts = torch.zeros(len(elements), dtype=torch.long)
-    cls = torch.zeros(len(elements), dtype=torch.long)
-    for i, (c, e) in enumerate(elements):
-        pts[i, : e.shape[0]] = e
-        pts[i, e.shape[0] :] = e[-1]  # tail padding repeats the last point
-        npts[i] = e.shape[0]
-        cls[i] = int(c)
-
-    # --- Ground truth trajectory: drive the middle of the leftmost forward lane.
+    # --- Ground truth: drive the middle of the leftmost forward lane.
     lane_centre = 0.5 * p.lane_width_m
     path = _offset(xy, head, lane_centre)
     trajectory = torch.cat([path, head.unsqueeze(-1)], dim=-1)
-    return World(pts=pts, npts=npts, cls=cls, trajectory=trajectory)
+    return _pack_elements(elements, trajectory, p)
 
 
 def chunk_for_map(world: World, chunk_m: float, step_m: float) -> World:
@@ -227,25 +297,15 @@ def chunk_for_map(world: World, chunk_m: float, step_m: float) -> World:
     therefore carry no information about position along the road.
     """
     chunk_pts = max(2, int(chunk_m / step_m) + 1)
-    elements: list[tuple[int, Tensor]] = []
+    elements: list[tuple[int, int, Tensor]] = []
     for i in range(len(world)):
         n = int(world.npts[i])
-        line, c = world.pts[i, :n], int(world.cls[i])
+        line, c, a = world.pts[i, :n], int(world.cls[i]), int(world.attr[i])
         if n < chunk_pts:
-            elements.append((c, line))
+            elements.append((c, a, line))
             continue
         for s in range(0, n - 1, chunk_pts - 1):
             piece = line[s : s + chunk_pts]
             if piece.shape[0] >= 2:
-                elements.append((c, piece))
-
-    max_pts = max(e.shape[0] for _, e in elements)
-    pts = torch.zeros(len(elements), max_pts, 2)
-    npts = torch.zeros(len(elements), dtype=torch.long)
-    cls = torch.zeros(len(elements), dtype=torch.long)
-    for i, (c, e) in enumerate(elements):
-        pts[i, : e.shape[0]] = e
-        pts[i, e.shape[0] :] = e[-1]
-        npts[i] = e.shape[0]
-        cls[i] = c
-    return World(pts=pts, npts=npts, cls=cls, trajectory=world.trajectory)
+                elements.append((c, a, piece))
+    return _pack_elements(elements, world.trajectory, world.params)

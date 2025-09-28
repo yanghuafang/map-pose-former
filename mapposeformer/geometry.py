@@ -94,7 +94,11 @@ def transform_points(pose: Tensor, pts: Tensor) -> Tensor:
     """
     c, s = torch.cos(pose[..., 2]), torch.sin(pose[..., 2])
     x, y = pts[..., 0], pts[..., 1]
-    out_x = pose[..., 0].unsqueeze(-1) + c.unsqueeze(-1) * x - s.unsqueeze(-1) * y
-    out_y = pose[..., 1].unsqueeze(-1) + s.unsqueeze(-1) * x + c.unsqueeze(-1) * y
+    out_x = (
+        pose[..., 0].unsqueeze(-1) + c.unsqueeze(-1) * x - s.unsqueeze(-1) * y
+    )
+    out_y = (
+        pose[..., 1].unsqueeze(-1) + s.unsqueeze(-1) * x + c.unsqueeze(-1) * y
+    )
     return torch.stack([out_x, out_y], dim=-1)
 
