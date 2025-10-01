@@ -24,20 +24,26 @@ def test_architecture_shapes_match_the_config():
     doc = (ROOT / "docs" / "ARCHITECTURE.md").read_text()
     c = Config()
     sp, gp = c.data.sample, c.model.grid
-    m, d, p = (
+    m, d, p, h = (
         sp.max_map_elements,
         sp.max_det_elements,
         sp.points_per_element,
+        sp.history,
     )
     expected = {
         "map_pts": f"`({m}, {p}, 2)`",
         "map_pmask": f"`({m}, {p})` bool",
         "map_cls": f"`({m},)`",
         "det_pts": f"`({d}, {p}, 2)`",
+        "hist_pts": f"`({h}, {d}, {p}, 2)`",
+        "hist_rel": f"`({h}, 3)`",
         "map crop radius": f"{sp.map_radius_m:g} m radius",
         "volume logits": f"`(B, {gp.num_x * gp.num_y * gp.num_yaw})`",
         "volume grid": f"{gp.num_x} × {gp.num_y} × {gp.num_yaw} grid",
-        "assignment matrix": f"`(B, {d * p}, {m * p})`",
+        # Every frame's detections, the history included: that width is the
+        # whole visible consequence of temporal fusion, and it was wrong in
+        # the table for exactly as long as the table said 256.
+        "assignment matrix": f"`(B, {(1 + h) * d * p}, {m * p})`",
         "refinement passes": f"`(B, {c.model.refine_iters}, 3)`",
     }
     stale = {k: v for k, v in expected.items() if v not in doc}
@@ -47,8 +53,10 @@ def test_architecture_shapes_match_the_config():
 def test_training_doc_matches_the_loss_defaults():
     doc = (ROOT / "docs" / "TRAINING.md").read_text()
     sp = Config().data.sample
+    # The history is part of the width: the model matches this frame's
+    # detections *and* the previous frames', warped here.
     det, mp = (
-        sp.max_det_elements * sp.points_per_element,
+        (1 + sp.history) * sp.max_det_elements * sp.points_per_element,
         sp.max_map_elements * sp.points_per_element,
     )
     entries = f"{det} × {mp} assignment entries"

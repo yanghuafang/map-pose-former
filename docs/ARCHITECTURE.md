@@ -14,12 +14,14 @@ interchangeable.
     map ──────────┐
                   ├─ tokenize ─ attend ─ assignment ─┬─ Procrustes ── delta
     detections ───┘                                  │
-                                                     └─ the same cost,
-                                                        on a grid ─── cov, trust
+      this frame, and the last two                   └─ the same cost,
+      warped here by egomotion                          on a grid ─── cov, trust
 ```
 
-1. **Tokenize.** One token per point, carrying a Fourier encoding of position,
-   class, paint style, detector confidence and uncertainty, element index,
+1. **Accumulate.** Past detections are warped into the current ego frame by
+   measured egomotion and become more detection tokens.
+2. **Tokenize.** One token per point, carrying a Fourier encoding of position,
+   class, paint style, detector confidence and uncertainty, age, element index,
    and index within the element.
 3. **Attend.** `L` layers of self-attention within each set and cross-attention
    both ways. Self-attention gives context ("third of four parallel lines");
@@ -40,12 +42,13 @@ counter-clockwise, metres and radians — `core::Frames`' vehicle convention, so
 `(1, 0)` means one metre forward.
 
 The map is cropped around the **prior pose** and expressed there. Detections sit
-in the **true ego frame**, where a sensor produces them.
+in the **true ego frame**, where a sensor produces them. Past detections sit in
+the ego frame of their own moment and reach this one through `hist_rel`.
 
 No world coordinate enters the network. A model given absolute coordinates over
 a handful of map regions memorises the regions, scores well, and localizes
 nothing. `tests/test_anchoring.py` moves a world 5 km, rotates it, and asserts
-the input tensors are unchanged.
+the input tensors are unchanged — history and egomotion included.
 
 ## Inputs
 
@@ -61,6 +64,9 @@ Static shapes, because the TensorRT milestone needs them.
 | `det_pmask`, `det_cls`, `det_attr` | as above | — | |
 | `det_conf` | `(32,)` | — | Detector score. Overlaps between true and false |
 | `det_sigma` | `(32, 2)` | m | Reported uncertainty: independent point noise, and whole-element offset |
+| `hist_pts` | `(2, 32, 8, 2)` | past ego · m | The previous two frames |
+| `hist_pmask`, `hist_cls`, `hist_attr`, `hist_conf`, `hist_sigma` | as above | — | |
+| `hist_rel` | `(2, 3)` | anchor · m, rad | Measured `curr⁻¹ ∘ past`, with drift proportional to distance |
 
 Carried in the sample and never read by the model: `delta` (the target),
 `prior` and `gt` (world-frame, so evaluation can compose the prediction back).
@@ -82,9 +88,9 @@ measurement when map matching fails — a filter's decision, not a network's.
 | `logits` | `(B, 4199)` | The cost surface over a 19 × 17 × 13 grid |
 | `cov` | `(B, 3, 3)` | Measurement covariance, from the surface's softmax-weighted spread |
 | `trust_logit` | `(B,)` | Learned replacement for the classical flat-surface and high-cost gates |
-| `assign` | `(B, 256, 576)` | Soft correspondence, detection points × map points |
+| `assign` | `(B, 768, 576)` | Soft correspondence, detection points × map points |
 | `mass` | `(B,)` | Assignment weight the answer rests on. Gated on, not merely reported |
-| `det_xy`, `det_valid` | `(B, 256, 2)`, `(B, 256)` | The detections actually matched, so the losses need not re-derive the assembly |
+| `det_xy`, `det_valid` | `(B, 768, 2)`, `(B, 768)` | The detections actually matched, so the losses need not re-derive the assembly |
 
 `(delta, cov, trust)` is what `LocalizationKF::Update` consumes. The filter, its
 gates and its evaluation stay; only the measurement source changes.
@@ -105,7 +111,7 @@ Computing it is free. The assignment-weighted squared error
 C(R, t) = Σ_ij a_ij ‖R d_i + t − m_j‖²
 ```
 
-looks like a sum over `4199 × 256 × 576` and is not: `‖R d‖² = ‖d‖²` under
+looks like a sum over `4199 × 768 × 576` and is not: `‖R d‖² = ‖d‖²` under
 rotation, and every remaining term factors through eleven numbers — the total
 mass, two weighted second moments, two weighted centroids, and the 2 × 2
 cross-covariance `M = Σ a_ij d_i m_jᵀ`. Those are the statistics weighted
@@ -181,6 +187,23 @@ through a chain of warps would make each pass responsible for the ones after it.
 Nothing is *solved* on the moved coordinates — every pass reads the original
 points, so each yields a total correction, and the cost surface stays anchored
 to the prior. Every pass is supervised on RAFT's schedule.
+
+## Temporal fusion
+
+What accumulates is evidence about the pose **error**, not about a pose. Every
+anchor is the same drifting estimate at a different time, and
+
+```
+A_t⁻¹ ∘ G_{t−k}  =  (A_t⁻¹ ∘ G_t) ∘ (G_t⁻¹ ∘ G_{t−k})  =  delta ∘ rel_ego
+```
+
+so a past detection reaches the current ego frame through `rel_ego` alone, which
+odometry measures. The unknown `delta` then aligns the accumulated set at once.
+
+Fusion is therefore more detection tokens, warped, with an age embedding — not a
+recurrence and not a state, so static shapes survive. `hist_rel` carries drift
+at 1% of distance travelled and 0.02°/m; noiseless egomotion would let the model
+fuse an arbitrarily long history for free.
 
 ## Numerical care
 

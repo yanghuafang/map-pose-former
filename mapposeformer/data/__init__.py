@@ -8,6 +8,7 @@ from mapposeformer.data.classes import (
 )
 from mapposeformer.data.dataset import DataParams
 from mapposeformer.data.sample import (
+    EgoParams,
     Element,
     PerceptionParams,
     PriorParams,
@@ -26,6 +27,7 @@ __all__ = [
     "NUM_ATTRS",
     "NUM_CLASSES",
     "DataParams",
+    "EgoParams",
     "Element",
     "LandmarkClass",
     "MarkType",

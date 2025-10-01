@@ -1,0 +1,25 @@
+# The temporal ablation: identical model, one frame of detections instead of three.
+#
+# This one needs its own training run rather than an eval override, because
+# `history` changes the model's input width -- unlike `refine_iters`,
+# `irls_iters`, `min_row_mass` and `data.sample.stripe_dashed`, which share
+# weights with the base run and can be swept from tools/eval.py directly.
+#
+# What to expect: along-track error should suffer most. A single frame sees one
+# frustum of landmarks, and the classes that pin longitudinal position -- poles,
+# signs, stop lines -- are the sparse ones, so accumulating two more frames of
+# them is worth more than accumulating more lane line.
+data:
+  num_scenes: {train: 800, val: 60, test: 120}
+  sample:
+    history: 0
+model:
+  dim: 128
+  num_layers: 4
+  history: 0
+train:
+  epochs: 40
+  batch_size: 64
+  num_workers: 16
+  amp: bf16
+  out_dir: runs/ablate_no_history

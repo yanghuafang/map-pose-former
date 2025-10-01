@@ -127,16 +127,18 @@ def _validate(cfg: Config) -> None:
         sp.max_map_elements,
         sp.max_det_elements,
         sp.points_per_element,
+        sp.history,
     )
     want = (
         mp.max_map_elements,
         mp.max_det_elements,
         mp.points_per_element,
+        mp.history,
     )
     if shape != want:
         raise ValueError(
             "data.sample and model disagree on input shape "
-            "(map/det/points): "
+            "(map/det/points/history): "
             f"{'/'.join(map(str, shape))} vs {'/'.join(map(str, want))}"
         )
     if mp.refine_iters < 1:

@@ -11,7 +11,7 @@ So stage 0 is procedural, which buys three things no public dataset offers:
 
 - **The answer is exact**, with no localization pipeline between label and truth.
 - **The evidence is controllable.** Turning poles off is one config line, and so
-  are the dashes and the detector's confidence.
+  are the dashes, the history, and the detector's confidence.
 - **Splits cannot leak**: disjoint seed ranges, so no two splits share a road.
 
 Stage 1 is nuScenes, with real detections — see [ROADMAP.md](ROADMAP.md).
@@ -82,13 +82,15 @@ same attribute, no paint pattern.
 
 ## One frame
 
-`data/sample.py`. Two point sets and the transform between them:
+`data/sample.py`. Two point sets, a history, and the transform between them:
 
 ```
 prior = gt ∘ error          error ~ truncated Gaussian, anisotropic
 delta = prior⁻¹ ∘ gt        the training target
 map   = world ∩ radius(prior),  in the prior's frame
 det   = world ∩ frustum(gt),    in the true ego frame, corrupted
+hist  = the same, from gt[frame − k·stride], in *its* ego frame
+rel   = gt⁻¹ ∘ gt_past,     as odometry measures it, with drift
 ```
 
 **The prior error is anisotropic**: 1.5 m along track, 0.6 m across, 1.0° of
@@ -107,6 +109,10 @@ score ~0.92 at zero range falling to ~0.62 at 50 m; clutter scores ~0.45. A
 score that separated them cleanly would be answering the question the model is
 being asked.
 
+**Egomotion drifts** at 1% of distance travelled and 0.02°/m — about 4 cm and
+0.08° over the 4 m between history frames. Small against the 1.5 m prior, which
+is what makes accumulating worthwhile. Noiseless egomotion would be an oracle.
+
 Every number here is a knob. Realism is not the goal; controllability is.
 
 ## The invariants
@@ -115,6 +121,12 @@ Apply the true correction to the detections and they land on the map:
 `test_true_correction_aligns_detections_onto_the_map` fails below a 0.75 inlier
 fraction. If the labels drift, every downstream metric looks healthy while
 measuring the wrong thing.
+
+The history has the same invariant, conjugated:
+`test_history_lands_on_the_map_through_egomotion` warps past detections through
+`hist_rel` then `delta` and requires them to align as well as the current frame
+— 0.904 against 0.904. A sign error there would train happily and silently turn
+the past into noise.
 
 ## Ablations
 
@@ -137,6 +149,7 @@ share weights with the base checkpoint:
 tools/eval.py runs/base/best.pt --split test 'data.sample.keep_classes=[0,1]'
 tools/eval.py runs/base/best.pt --split test data.sample.stripe_dashed=false
 tools/eval.py runs/base/best.pt --split test model.refine_iters=1
+tools/train.py --config configs/ablate_no_history.yaml
 ```
 
 Longitudinal RMSE should grow sharply under the first while lateral and heading

@@ -69,6 +69,10 @@ class ModelParams:
     max_map_elements: int = 72
     max_det_elements: int = 32
     points_per_element: int = 8
+    history: int = 2
+    """Past frames folded in. Must equal ``data.sample.history``; the config
+    validator holds the two together, because a mismatch is a shape error a
+    hundred lines away from its cause."""
     refine_iters: int = 2
     """Matching passes. One is the single-shot model. Each extra pass costs a
     full trunk forward and no parameters at all."""
@@ -91,6 +95,16 @@ class ModelParams:
     made it the other one."""
 
 
+def _join(current: Tensor, history: Tensor) -> Tensor:
+    """@brief Lay the current frame and the past ones on one element axis.
+
+    @param current Tensor shaped ``(B, E, ...)`` -- this frame.
+    @param history Tensor shaped ``(B, K, E, ...)`` -- the previous K frames.
+    @return Tensor shaped ``(B, (1 + K) * E, ...)``, this frame first.
+    """
+    return torch.cat([current.unsqueeze(1), history], dim=1).flatten(1, 2)
+
+
 def _quality(conf: Tensor, sigma: Tensor) -> Tensor:
     """``(B, N)`` confidence and ``(B, N, 2)`` metres -> ``(B, N, 3)`` features.
 
@@ -108,11 +122,12 @@ class MapPoseFormer(nn.Module):
     def __init__(self, p: ModelParams | None = None):
         super().__init__()
         self.p = p = p or ModelParams()
+        det_slots = (1 + p.history) * p.max_det_elements
         self.det_tokens = PointTokenizer(
             p.dim,
             NUM_CLASSES,
             NUM_ATTRS,
-            p.max_det_elements,
+            det_slots,
             p.points_per_element,
             p.num_bands,
         )
@@ -124,6 +139,10 @@ class MapPoseFormer(nn.Module):
             p.points_per_element,
             p.num_bands,
         )
+        # How many frames ago a detection was seen. Its egomotion warp is
+        # already applied, so this says only "trust this less" -- the warp has
+        # drift in it, and the drift grows with age.
+        self.age_emb = nn.Embedding(1 + p.history, p.dim)
         # Confidence 1.0 and the survey tolerance, logged, to match _quality.
         survey = torch.tensor([1.0, p.map_sigma_m, p.map_sigma_m])
         survey[1:] = survey[1:].log()
@@ -162,14 +181,48 @@ class MapPoseFormer(nn.Module):
             raise ValueError(f"unknown pose_head {p.pose_head!r}")
 
     def _detections(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
-        """This frame's detections, packed with their quality features."""
-        conf, sigma = batch["det_conf"], batch["det_sigma"]
+        """Every detection this frame can use, in the current true ego frame.
+
+        A past detection was recorded in the ego frame of *its* moment. The
+        measured relative egomotion ``curr⁻¹ ∘ past`` brings it here, and that
+        composition is known: it needs no knowledge of the correction being
+        predicted, which is exactly why evidence can be accumulated before the
+        pose is solved rather than after.
+        """
+        pts, pmask = batch["det_pts"], batch["det_pmask"]
+        cls, attr, conf = batch["det_cls"], batch["det_attr"], batch["det_conf"]
+        sigma = batch["det_sigma"]
+        k = int(batch["hist_rel"].shape[1])
+        if k:
+            b, _, e, p, _ = batch["hist_pts"].shape
+            warped = G.transform_points(
+                batch["hist_rel"].reshape(b * k, 3),
+                batch["hist_pts"].reshape(b * k, e * p, 2),
+            ).view(b, k, e, p, 2)
+
+            pts = _join(pts, warped)
+            pmask = _join(pmask, batch["hist_pmask"])
+            cls = _join(cls, batch["hist_cls"])
+            attr = _join(attr, batch["hist_attr"])
+            conf = _join(conf, batch["hist_conf"])
+            sigma = _join(sigma, batch["hist_sigma"])
+        # `expand` then `reshape`, not `repeat_interleave`: the latter is
+        # `aten.repeat_interleave.self_int`, which the ONNX exporter has no
+        # conversion for, and this vector is a constant that does not depend on
+        # any input. Costs nothing and keeps the graph exportable.
+        age = (
+            torch.arange(1 + k, device=pts.device)
+            .view(-1, 1)
+            .expand(-1, self.p.max_det_elements)
+            .reshape(-1)
+        )
         return {
-            "pts": batch["det_pts"],
-            "pmask": batch["det_pmask"],
-            "cls": batch["det_cls"],
-            "attr": batch["det_attr"],
+            "pts": pts,
+            "pmask": pmask,
+            "cls": cls,
+            "attr": attr,
             "quality": _quality(conf, sigma),
+            "age": self.age_emb(age).unsqueeze(0),
         }
 
     def _map_quality(self, cls: Tensor, dtype: torch.dtype) -> Tensor:
@@ -192,6 +245,7 @@ class MapPoseFormer(nn.Module):
             det["cls"],
             det["attr"],
             det["quality"],
+            det["age"],
         )
         m, mpad = self.map_tokens(
             batch["map_pts"],

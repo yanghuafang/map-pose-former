@@ -9,9 +9,9 @@ Five terms, and the interesting one is not the pose term.
 ``trust``     Can the model tell when it has failed?
 
 The ``match`` term is what makes the rest work. The pose term alone gives a
-single 3-vector of gradient to share among a hundred thousand assignment
-entries, and a model trained that way discovers that predicting the mean of the
-prior is a decent local minimum long before it discovers correspondence. The
+single 3-vector of gradient to share among the 768 x 576 assignment entries,
+and a model trained that way discovers that predicting the mean of the prior is
+a decent local minimum long before it discovers correspondence. The
 match term gives every detected point its own target, from the one source that
 cannot be wrong: apply the true correction and see which map point it lands on.
 
@@ -35,7 +35,7 @@ _EPS = 1e-8
 
 @dataclass(frozen=True)
 class LossParams:
-    """Term weights and the two thresholds that define the auxiliary targets."""
+    """Term weights, and the tolerances that define the auxiliary targets."""
 
     w_pose: float = 1.0
     w_volume: float = 1.0

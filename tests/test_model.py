@@ -308,6 +308,35 @@ def test_refinement_runs_the_trunk_once_per_pass():
         assert torch.equal(out["delta"], out["deltas"][:, -1])
 
 
+def test_history_is_used_and_can_be_switched_off():
+    """``history=0`` must be the single-frame model exactly, not a special case.
+
+    The temporal ablation is "same code, no past", so the zero-history path has
+    to be the same path -- an empty concatenation, not a branch that skips the
+    warp and quietly skips something else with it.
+    """
+    from mapposeformer.data.sample import SampleParams
+
+    p = DataParams(sample=SampleParams(history=0))
+    d = SyntheticDataset(p, "train")
+    b = {k: torch.stack([d[i * 37][k] for i in range(2)]) for k in d[0]}
+    out = MapPoseFormer(ModelParams(history=0))(b)
+    sp = p.sample
+    assert out["det_xy"].shape == (
+        2,
+        sp.max_det_elements * sp.points_per_element,
+        2,
+    )
+    assert torch.isfinite(out["delta"]).all()
+
+    # With history, the model sees three frames' worth of detection tokens.
+    wide = MapPoseFormer(ModelParams())(_batch(2))
+    assert (
+        wide["det_xy"].shape[1]
+        == 3 * sp.max_det_elements * sp.points_per_element
+    )
+
+
 def test_calibration_separates_honest_from_overconfident():
     """ANEES near one when the covariance matches the errors, and above it when
     the covariance is too small.

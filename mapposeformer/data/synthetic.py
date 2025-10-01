@@ -32,7 +32,11 @@ class SyntheticDataset(Dataset):
         self._epoch = 0
         self._cache: dict[int, tuple[World, World]] = {}
         probe, _ = self._world(0)
-        lo = params.edge_margin
+        # Enough room behind the first frame for its history, or the earliest
+        # frames would silently reuse frame 0 for every past slot and train the
+        # temporal path on duplicates.
+        sp = params.sample
+        lo = max(params.edge_margin, sp.history * sp.history_stride)
         hi = probe.trajectory.shape[0] - params.edge_margin
         self._frames = list(range(lo, hi, params.frame_stride))
 

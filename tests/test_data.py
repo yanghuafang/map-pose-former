@@ -220,6 +220,33 @@ def test_detector_confidence_is_evidence_and_not_a_label():
     assert float((conf > 0.7).float().mean()) > 0.3
 
 
+def test_history_lands_on_the_map_through_egomotion():
+    """The temporal invariant, and it is the single-frame one conjugated.
+
+    A past detection sits in the ego frame of its own moment. ``hist_rel``
+    brings it to this one and the true correction takes it to the map -- so if
+    the composition is right, history frames must align exactly as well as the
+    current frame does. A sign error in the conjugation would still train, and
+    would silently make the past into noise.
+    """
+    ds = SyntheticDataset(DataParams(), "train")
+    now, past = [], []
+    for s in (ds[i] for i in FRAMES):
+        now.append(_inlier_frac(s, s["delta"]))
+        for k in range(s["hist_rel"].shape[0]):
+            here = G.transform_points(
+                s["hist_rel"][k], s["hist_pts"][k][s["hist_pmask"][k]]
+            )
+            pts = G.transform_points(s["delta"], here)
+            dist = _distance_to_map(pts, s["map_pts"], s["map_pmask"])
+            past.append((dist < 1.0).float().mean())
+    now, past = torch.stack(now).mean(), torch.stack(past).mean()
+    assert float(past) > 0.75, f"history inlier fraction {float(past):.3f}"
+    assert abs(float(now) - float(past)) < 0.05, (
+        f"now {now:.3f} vs past {past:.3f}"
+    )
+
+
 def test_reported_uncertainty_tracks_the_noise_it_describes():
     """A detector reports a covariance, and it is an estimate rather than the
     realisation.

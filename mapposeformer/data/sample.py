@@ -13,6 +13,11 @@ dashed line reaches the map as an attribute and the detector as paint. See
 :func:`~mapposeformer.data.world.chunk_for_map` for why sharing the chunking
 would invalidate the experiment.
 
+Each sample also carries the previous ``history`` frames' detections in *their*
+ego frames, plus the measured egomotion that brings them here. What accumulates
+is evidence about the pose *error*, so the past folds in through a known
+transform and the single unknown correction aligns the whole set.
+
 Neither point set carries a world coordinate, so the same local geometry gives
 identical tensors wherever it sits; ``tests/test_anchoring.py`` holds that. The
 prior leaves here only so evaluation can compose the prediction back.
@@ -77,6 +82,21 @@ class PriorParams:
 
 
 @dataclass(frozen=True)
+class EgoParams:
+    """Relative egomotion, as odometry delivers it: accurate, not exact.
+
+    Noiseless egomotion would be an oracle -- the model could fuse an
+    arbitrarily long history for free and the temporal experiment would measure
+    nothing. Error grows with distance travelled, so that is how it is modelled.
+    """
+
+    drift_frac: float = 0.01
+    """Translation error per metre travelled: 4 cm over the 4 m between history
+    frames, against a 1.5 m prior. That gap is why accumulating is worth it."""
+    yaw_drift_deg_per_m: float = 0.02
+
+
+@dataclass(frozen=True)
 class PerceptionParams:
     """The detection model this project does not train, described statistically.
 
@@ -129,8 +149,16 @@ class SampleParams:
     chunk and a 50 m radius the five along-road lines alone account for about
     forty."""
     max_det_elements: int = 32
+    history: int = 2
+    """Past frames folded into each sample. Zero is exactly the single-frame
+    model, which is what the ablation against it needs."""
+    history_stride: int = 2
+    """Trajectory steps back per history frame. At the world's 2 m pitch that
+    reaches 4 m and 8 m behind: far enough to see different landmarks, near
+    enough that the egomotion between them is still accurate."""
     prior: PriorParams = field(default_factory=PriorParams)
     perception: PerceptionParams = field(default_factory=PerceptionParams)
+    ego: EgoParams = field(default_factory=EgoParams)
     keep_classes: tuple[int, ...] = tuple(range(NUM_CLASSES))
     """Class ablation. Restricting this is the experiment described in
     ``classes.py``: drop the along-track anchors and watch longitudinal error
@@ -427,10 +455,33 @@ def _detect(
     )
 
 
+def _measured_egomotion(
+    curr: Tensor, past: Tensor, p: EgoParams, gen: torch.Generator
+) -> Tensor:
+    """``curr⁻¹ ∘ past`` as odometry reports it, drift growing with travel.
+
+    Composed on the right, in the past frame, because that is where the error
+    accumulated: the vehicle drove from there to here and the integration is
+    what went wrong.
+    """
+    rel = G.relative(curr, past)
+    dist = float(rel[:2].norm())
+    err = torch.tensor(
+        [
+            p.drift_frac * dist * float(torch.randn(1, generator=gen).item()),
+            p.drift_frac * dist * float(torch.randn(1, generator=gen).item()),
+            math.radians(p.yaw_drift_deg_per_m)
+            * dist
+            * float(torch.randn(1, generator=gen).item()),
+        ]
+    )
+    return G.compose(rel, err)
+
+
 def build_sample(
     world: World, map_world: World, frame: int, seed: int, sp: SampleParams
 ) -> dict[str, Tensor]:
-    """One frame: an anchored map, anchored detections, and the transform.
+    """One frame: anchored map, anchored detections, history, and the transform.
 
     @param world The scene as continuous geometry, from
         :func:`~mapposeformer.data.world.build_world`. Detections are cut from
@@ -474,6 +525,26 @@ def build_sample(
     m = _pack(map_el, sp.max_map_elements, sp.points_per_element)
     d = _detect(world, gt, keep, sp, gen)
 
+    # --- The past, in its own frames, plus the egomotion that moves it here.
+    hist, rel = [], []
+    for k in range(1, sp.history + 1):
+        f = max(0, frame - k * sp.history_stride)
+        past = world.trajectory[f]
+        hist.append(_detect(world, past, keep, sp, gen))
+        rel.append(_measured_egomotion(gt, past, sp.ego, gen))
+    e, p = sp.max_det_elements, sp.points_per_element
+
+    def stack(key: str, shape: tuple[int, ...]) -> Tensor:
+        """History frames as one tensor, or an empty one when there are none.
+
+        @param key Field name shared by every history frame's pack.
+        @param shape Per-frame shape, so the empty case still types correctly.
+        @return ``(K, *shape)``, with ``K = 0`` when ``history`` is zero.
+        """
+        if not hist:
+            return torch.zeros(0, *shape, dtype=d[key].dtype)
+        return torch.stack([h[key] for h in hist])
+
     return {
         "map_pts": m["pts"],
         "map_pmask": m["pmask"],
@@ -485,6 +556,13 @@ def build_sample(
         "det_attr": d["attr"],
         "det_conf": d["conf"],
         "det_sigma": d["sigma"],
+        "hist_pts": stack("pts", (e, p, 2)),
+        "hist_pmask": stack("pmask", (e, p)),
+        "hist_cls": stack("cls", (e,)),
+        "hist_attr": stack("attr", (e,)),
+        "hist_conf": stack("conf", (e,)),
+        "hist_sigma": stack("sigma", (e, 2)),
+        "hist_rel": torch.stack(rel) if rel else torch.zeros(0, 3),
         "delta": delta,
         "prior": prior,
         "gt": gt,

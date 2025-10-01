@@ -23,7 +23,7 @@ Or from the laptop, against the A6000:
 | `trust` | 0.2 | Whether this frame succeeded |
 
 **`match` is the term that makes the rest work.** The pose term alone gives one
-3-vector of gradient to share among 256 × 576 assignment entries, and a model
+3-vector of gradient to share among 768 × 576 assignment entries, and a model
 trained that way finds "predict the mean of the prior" long before it finds
 correspondence. `match` gives every detected point its own target from the one
 source that cannot be wrong: apply the true correction and see which map point
@@ -32,8 +32,9 @@ rather than drag the pose towards whatever they are nearest.
 
 That target needs only the ground-truth pose, which every localization dataset
 has, so the same code runs unchanged on nuScenes. It reads detections from the
-model's output rather than the batch, so the loss never re-derives an assembly
-the model already built.
+model's output rather than the batch — the model matches this frame's plus the
+previous frames' warped here, and re-deriving that assembly in the loss would be
+the same geometry written twice.
 
 **`volume` now trains the matcher.** When the surface was an MLP, this gradient
 went into the MLP. The surface is computed from the assignment now, so the only
@@ -181,4 +182,4 @@ Every checkpoint stores the `Config` that produced it — a checkpoint whose inp
 shape and grid extent are unknown cannot be loaded, only guessed at.
 `tools/eval.py` reads that config back and applies overrides on top, which is
 what makes the ablations fair: the model is unchanged and only the evidence
-differs.
+differs. Only `history` changes the input width and needs its own training run.

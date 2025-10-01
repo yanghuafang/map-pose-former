@@ -60,11 +60,11 @@ python -m pip install --index-url "${index}" torch
 python -m pip install -r requirements.txt
 
 if (( deploy )); then
-  # M6 needs the ONNX path; tests/test_export.py skips without it. onnxruntime
+  # M5 needs the ONNX path; tests/test_export.py skips without it. onnxruntime
   # is what checks the exported graph still computes the same answer.
   python -m pip install onnx onnxscript onnxruntime
   if (( cuda )); then
-    # M5 and M6. Both are Linux/CUDA wheels and have no macOS build, which is
+    # M4 and M5. Both are Linux/CUDA wheels and have no macOS build, which is
     # why they are behind --cuda rather than behind --deploy alone.
     # nvidia-modelopt replaces pytorch-quantization, which is deprecated.
     python -m pip install tensorrt nvidia-modelopt

@@ -61,7 +61,7 @@ def test_sample_is_unchanged_by_moving_the_whole_world():
     for frame in (10, 60):
         a = build_sample(world, chunked, frame, 5, sp)
         b = build_sample(moved, moved_chunked, frame, 5, sp)
-        for key in ("map_pts", "det_pts", "delta"):
+        for key in ("map_pts", "det_pts", "delta", "hist_pts", "hist_rel"):
             assert torch.allclose(a[key], b[key], atol=1e-3), key
         for key in (
             "map_cls",
@@ -70,8 +70,13 @@ def test_sample_is_unchanged_by_moving_the_whole_world():
             "det_attr",
             "map_pmask",
             "det_pmask",
+            "hist_pmask",
         ):
             assert torch.equal(a[key], b[key]), key
+        # The history is anchored too. It is expressed in *its own* ego frame
+        # and reaches this one through ``hist_rel``, so both must be invariant
+        # or the temporal path would be the one thing carrying world position.
+        assert torch.allclose(a["hist_conf"], b["hist_conf"]), "hist_conf"
         # The pose itself did move -- otherwise the test would be checking that
         # ``_move_world`` does nothing.
         assert not torch.allclose(a["gt"], b["gt"])
