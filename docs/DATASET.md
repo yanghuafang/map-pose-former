@@ -160,3 +160,34 @@ The history has the same invariant, conjugated:
 samples at the 1 m match radius. A sign error there would train happily and
 silently turn the past into noise.
 
+## Ablations
+
+`data/classes.py` states a claim:
+
+| Class | Lateral | Longitudinal | Heading |
+|---|---|---|---|
+| lane divider, road boundary | strong | **~none** | strong |
+| ped crossing, stop line | weak | **strong** | strong |
+| pole, traffic sign | strong | **strong** | moderate |
+
+Lane geometry runs parallel to travel, so sliding a hypothesis down the road
+costs almost nothing. A model given only lane detections has an unobservable
+degree of freedom that no amount of training fixes.
+
+Two of these are pure data knobs: they change what the model is shown without
+changing the shape of it, so one checkpoint answers both.
+
+| override | asks |
+|---|---|
+| `data.sample.keep_classes=[0,1]` | lanes only — is along-track error unobservable without point landmarks? |
+| `data.sample.stripe_dashed=false` | do dashes carry information, or only repeat? |
+
+Longitudinal RMSE should grow sharply under the first while lateral and heading
+barely move. If it does not, the model is not using the landmarks it claims to,
+or something is leaking.
+
+Two more need a run of their own. Dropping the history changes the input shape,
+so a model trained with it cannot be evaluated without it. And *training* on the
+restricted classes, rather than only evaluating that way, separates "cannot see
+it at inference" from "never learned to".
+
