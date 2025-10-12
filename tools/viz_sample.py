@@ -38,8 +38,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mapposeformer import geometry as G
 from mapposeformer.config import Config
+from mapposeformer.data import build_dataset
 from mapposeformer.data.classes import LandmarkClass
-from mapposeformer.data.synthetic import SyntheticDataset
 
 _W, _H, _PAD = 900, 900, 30
 
@@ -189,7 +189,7 @@ def main() -> int:
         model.load_state_dict(ckpt["model"])
         model.eval()
 
-    sample = SyntheticDataset(cfg.data, args.split)[args.index]
+    sample = build_dataset(cfg.data, args.split)[args.index]
     if args.checkpoint:
         with torch.no_grad():
             pred = model({k: v.unsqueeze(0) for k, v in sample.items()})[

@@ -99,13 +99,13 @@ survive, which TensorRT needs.
 
 ## What is real, and what is not
 
-- **The data is generated.** KITTI ships no HD map, and synthesizing one from
-  ground truth makes the map a function of the pose being predicted. Procedural
-  scenes buy a known answer and controllable evidence. nuScenes is
-  [M2](docs/ROADMAP.md).
-- **Perception is an input.** No detector is trained. On generated data
-  detections come from the map with an error model; on nuScenes they will come
-  from a pretrained online mapper run offline.
+- **The map is real; the detections are not.** Stage 0 is procedural, because
+  KITTI ships no HD map and synthesizing one from ground truth makes the map a
+  function of the pose being predicted. M2a replaced it with nuScenes' surveyed
+  map on a geographically disjoint split — see [ROADMAP.md](docs/ROADMAP.md).
+- **Perception is an input.** No detector is trained, and none has been run yet:
+  detections are still cut from the map and corrupted, on both datasets. M2b
+  swaps in a pretrained online mapper's output.
 - **Open loop only.** The prior is drawn from a distribution, not produced by
   the previous frame.
 
@@ -138,10 +138,10 @@ steps.
 | | trans | long | lat | yaw | recall @ 0.25 m, 0.5° |
 |---|---|---|---|---|---|
 | do nothing (the prior) | 1.611 | 1.497 | 0.596 | 0.993° | 1.3% |
-| all frames | **0.308** | 0.293 | 0.095 | 0.211° | **96.0%** |
+| all frames | **0.336** | 0.322 | 0.095 | 0.209° | **96.0%** |
 | *the architecture this replaced* | *0.521* | *0.498* | *0.154* | *0.590°* | *86.0%* |
 
-A 5.2× reduction on translation, 41% better than the model it replaced.
+A 4.8× reduction on translation, 35% better than the model it replaced.
 
 **And 0.44% of frames are confidently wrong.** The median frame is calibrated
 and the tail-excluded ANEES is 1.03, but 39 frames of 8 880 have a covariance
@@ -154,14 +154,29 @@ Three ablations worth the space, all one checkpoint under less evidence:
 
 | | trans | long |
 |---|---|---|
-| everything | **0.308** | 0.293 |
-| **nuScenes' classes** — no poles or signs | 1.074 | 1.069 |
-| lane geometry only | 1.408 | 1.405 |
-| no dashed stripe geometry | 0.351 | 0.340 |
+| everything | **0.336** | 0.322 |
+| **as nuScenes was assumed to be** — no point landmarks | 1.061 | 1.057 |
+| lane geometry only | 1.371 | 1.367 |
+| no dashed stripe geometry | 0.339 | 0.328 |
 
-Lane geometry recovers essentially nothing along track (1.405 against a 1.497
-prior) while recovering 83% laterally. The dashes carry 16% of the longitudinal
-signal — the experiment a public dataset cannot run cheaply, and it worked.
+Lane geometry recovers essentially nothing along track (1.367 against a 1.497
+prior) while recovering 83% laterally — the asymmetry this project exists to
+measure.
+
+### On a real map
+
+nuScenes, geographically disjoint split, same architecture: **1.591 m to
+1.049 m** open loop, 0.713 m on trusted frames. A 1.5× reduction where generated
+scenes give 5.2×, and the gap is the finding — a generated world carries every
+class in comparable numbers, while nuScenes gives 13.8 lane-geometry detections
+a frame against 1.1 crossings and 0.6 traffic signs.
+
+It read 0.280 m until the map stopped being the detector. The reader chunked
+the map once at ingest and used that same element list as the source of
+detections, so both sides shared element endpoints at fixed world positions —
+a perfect along-track landmark, and exactly the failure `chunk_for_map`'s
+docstring had described in advance. [RESULTS.md](docs/RESULTS.md) has what it
+cost and the four bugs found before it.
 
 ## Tools
 
@@ -177,6 +192,7 @@ signal — the experiment a public dataset cannot run cheaply, and it worked.
 |---|---|
 | `scripts/setup.sh` | conda env and torch, `--cuda` for the training box |
 | `scripts/ci.sh` | Format, lint, tests; `--smoke` adds the end-to-end run |
+| `scripts/status.sh` | What is training on the box, how far along, and whether runs are competing |
 | `scripts/run_smoke.sh` | Train, evaluate and visualise in minutes, on CPU |
 | `scripts/docs.sh` | Doxygen API reference from the docstrings |
 | `scripts/remote-ubuntu.sh` | Mirror this tree to the Ubuntu box and run there |

@@ -53,16 +53,21 @@ ALONG_TRACK_ANCHORS = (
     LandmarkClass.TRAFFIC_SIGN,
 )
 
-#: Which classes nuScenes' map expansion actually carries. Poles and signs are
-#: not among them, which is why the real-data milestone expects weaker
-#: longitudinal observability than the synthetic one. Stated here rather than
-#: discovered later in a metrics table.
 NUSCENES_AVAILABLE = (
     LandmarkClass.LANE_DIVIDER,
     LandmarkClass.ROAD_BOUNDARY,
     LandmarkClass.PED_CROSSING,
-    LandmarkClass.STOP_LINE,
+    LandmarkClass.TRAFFIC_SIGN,
 )
+"""What the nuScenes map expansion actually supplies, once read.
+
+Stated here rather than discovered later in a metrics table, because it is what
+the synthetic ablation stands in for. It was ``(..., STOP_LINE)`` on the
+assumption that nuScenes had stop lines and no point landmarks, and reading the
+map showed both halves wrong: the stop-line annotation is a stop *zone* with no
+usable bar direction, and there are 307 traffic lights with poses. Same size, a
+different set -- see ``data/nuscenes.py`` and ``docs/DATASET.md``.
+"""
 
 
 class MarkType(enum.IntEnum):

@@ -14,7 +14,9 @@ So stage 0 is procedural, which buys three things no public dataset offers:
   are the dashes, the history, and the detector's confidence.
 - **Splits cannot leak**: disjoint seed ranges, so no two splits share a road.
 
-Stage 1 is nuScenes, with real detections — see [ROADMAP.md](ROADMAP.md).
+Stage 1 is nuScenes: M2a replaces the generated map with a surveyed one and
+leaves the error model in place, M2b replaces the error model with a real
+detector — see [ROADMAP.md](ROADMAP.md).
 
 ## Getting nuScenes
 
@@ -23,15 +25,19 @@ Accept the Terms of Use at <https://www.nuscenes.org/nuscenes#download> first;
 
 ```bash
 scripts/download_nuscenes.sh --dry-run   # check URLs, transfer nothing
-scripts/download_nuscenes.sh             # maps + metadata, ~0.5 GB
-scripts/download_nuscenes.sh --blobs     # camera archives, ~350 GB
+scripts/download_nuscenes.sh             # map, poses, CAN bus: 1.6 GB
+scripts/download_nuscenes.sh --blobs     # ...and 316 GB of camera and lidar
 ```
 
-Both halves are needed. The map and metadata give the real map; the camera
-archives are what a pretrained mapper reads to produce real detections. The
-script checks every URL before transferring a byte, resumes, and names the files
-it expects — an archive unpacked into the wrong directory otherwise looks like
-success.
+**The default is all M2a needs**, because perception is an input here:
+detections are cut from the map and corrupted, and no detector is ever run. The
+blobs matter at M2b, where a pretrained mapper reads the 53 GB of keyframe
+images inside them; the other 263 GB are sweeps and lidar that nothing here
+reads.
+
+The script checks every URL before transferring a byte, resumes, and names the
+files it expects — an archive unpacked into the wrong directory otherwise looks
+like success.
 
 ## The world
 
@@ -53,8 +59,8 @@ because real vector maps are chunked, and because one 600 m element would be a
 token whose points are mostly out of view.
 
 `intersection_spacing_m = 110` is the most consequential number in the file:
-stop lines and crossings are the only along-track evidence a nuScenes-style map
-carries, so it sets how often the longitudinal degree of freedom is observable.
+crossings and traffic lights are the only along-track evidence a nuScenes-style
+map carries, so it sets how often the longitudinal degree of freedom is observable.
 
 ## The dashes
 
@@ -80,6 +86,65 @@ the opposite. `_crop` returns whole elements for this reason.
 `data.sample.stripe_dashed=false` removes the stripes without touching the map:
 same attribute, no paint pattern.
 
+## The split
+
+Geographic, not the official one: nuScenes' own train and val share roads, so a
+localizer evaluated on them has seen the ground it is tested on. Each city is
+cut along its longest axis with dead ground between the bands, and a scene joins
+a split only if its **whole trajectory** fits inside one — a scene that starts
+in train's band and ends in val's belongs to neither.
+
+Measured separation between test and train is **307 m**, six times the 50 m map
+query radius, so no map element is shared. That comparison is made **per city**:
+every nuScenes map has its own origin, so scenes on different continents sit at
+the same coordinates and comparing them together reports a collision that is not
+there. `tests/test_nuscenes.py` holds both properties.
+
+720 of 850 scenes survive; the rest straddle a boundary and are dropped.
+
+## What nuScenes actually carries
+
+The map expansion stores areas as polygons, and a polygon is not what a
+localizer can use. Each class needs the geometry its label denotes, or the model
+is told the wrong thing rather than nothing:
+
+| nuScenes layer | read as | why |
+|---|---|---|
+| `lane_divider`, `road_divider` | polyline | already a line |
+| `drivable_area` | closed outline | a boundary *is* a line |
+| `ped_crossing` | the polygon's long axis | an elongated area; its axis is the bar across the road |
+| `traffic_light` | a point | the only point landmark nuScenes has, and sparse -- one within 120 m of about a fifth of scenes |
+| `stop_line` | **not read** | see below |
+
+**Stop lines are dropped, and the reason is the useful part.** nuScenes
+annotates a stop *zone*, not a stop *bar*: 83% of the polygons are rounder than
+2:1, median aspect 1.5, so there is no direction to extract. Closing them into
+outlines put a third of their segments *along* the road under a label asserting
+they run across it. Evidence that is mislabelled is worse than evidence that is
+absent: an omitted class costs the model what it knew, a mislabelled one teaches
+it something false about every other member of that class.
+
+The general lesson outlives nuScenes: **a class is a claim about what geometry
+constrains**, and an ingest that satisfies the label while violating the claim
+is harder to find than one that simply omits the class, because everything
+downstream keeps working.
+
+## The map is not the detector
+
+The stored map is chunked at survey boundaries; detections are cut out of the
+continuous world by the frustum, whose ends sit at a fixed *range* and so carry
+no information about position along the road. If both sides were cut the same
+way they would share element endpoints at fixed world positions, and a shared
+endpoint is a perfect along-track landmark — a model given only lane geometry
+would localize along the road from an artefact of how the polylines were cut.
+
+The nuScenes reader did exactly that for its first two runs: it chunked once at
+ingest and handed the result to `build_sample` as both arguments, 1088 source
+elements against 1088 map elements. Both datasets now derive the map with
+`chunk_for_map` and cut detections from the unchunked world;
+`test_the_map_and_the_detection_source_are_chunked_apart` fails if that stops
+being true. [RESULTS.md](RESULTS.md) has what it cost.
+
 ## One frame
 
 `data/sample.py`. Two point sets, a history, and the transform between them:
@@ -97,6 +162,25 @@ rel   = gt⁻¹ ∘ gt_past,     as odometry measures it, with drift
 heading. Dead reckoning drifts fastest along travel, and along-track is also the
 direction lane geometry cannot see — the hard axis and the weak evidence are the
 same axis. A symmetric prior would hide that.
+
+**Clutter draws its class from what the frame actually detected, with
+multiplicity.** This looked like a detail and was not, and it took two attempts:
+
+- *Uniform over the enum.* On nuScenes, which has no poles and whose stop-line
+  annotation is unusable, a third of clutter carried classes the map cannot
+  supply, so it never matched anything — and restricting `keep_classes` then
+  removed that garbage along with the evidence.
+- *Uniform over the classes the scene contains.* Equal clutter on unequal
+  populations contaminates rare classes hardest. Measured on the nuScenes test
+  split: 10.0 road boundaries per frame against 0.7 traffic signs, 0.5 clutter
+  elements each, so **4.7% noise on one class and 42.9% on the other** — and the
+  rare classes are the along-track anchors the ablation exists to weigh.
+
+Drawing with multiplicity equalises the *ratio* instead of the count, leaving
+every class near `clutter_mean / total`: 7.5%, 13.2%, 8.6% and 6.2% on the four
+classes above. All three rules agree on generated scenes, which hold every class
+in comparable numbers. A real map is not balanced, and the observability
+ablation is the instrument sensitive enough to notice.
 
 **The detector is statistical, not a network.** Element dropout, correlated
 lateral bias per element, range-dependent point noise, clutter, occasional class

@@ -176,6 +176,22 @@ Neither model is parameter-bound — the student's weights are 9 MB against
 6.9 GiB of activations — so cutting batch size is the lever, not cutting width.
 [RESULTS.md](RESULTS.md) has the table and why the activations dominate.
 
+## Checking on a run
+
+```bash
+./scripts/status.sh
+```
+
+Reports the training runs on the box, their progress and ETA, and warns when
+more than one is sharing the GPU.
+
+It counts runs by *parent* process, because a run's dataloader workers are
+forks that share its argv and naive matching reports 33 runs where there is
+one. It also never matches on a pattern that appears in its own command line:
+`pkill -f tools/train.py` matches the shell running it, so pkill kills itself,
+the targets survive, and the follow-up check reports success. Three runs once
+shared one GPU for five hours that way, all writing into the same directory.
+
 ## Reproducing a run
 
 Every checkpoint stores the `Config` that produced it — a checkpoint whose input

@@ -60,12 +60,13 @@ A step-matched A/B ranked them before any of them was run to convergence: the
 rebuild is 15.5% better than the pre-rebuild model at equal steps, and history
 accounts for 12.9 of those points and earns its 2.4×.
 
-**Converged, it holds.** 0.308 m test translation RMSE against a 1.611 m prior,
-41% better than the 0.521 m of the architecture it replaced, with recall at
+**Converged, it holds.** 0.336 m test translation RMSE against a 1.611 m prior,
+35% better than the 0.521 m of the architecture it replaced, with recall at
 25 cm rising from 86.0% to 96.0%. The observability ablation reproduces and
-sharpens. The dashed-stripe experiment worked — removing the paint geometry
-costs 16% of longitudinal error. The robust solve earns its place on lateral
-and heading. Full tables in [RESULTS.md](RESULTS.md).
+sharpens. The dashed-stripe experiment kept its sign and lost its magnitude:
+16% of longitudinal error when first measured, 2% under this milestone's
+corrected clutter rule. The robust solve earns its place on lateral and
+heading. Full tables in [RESULTS.md](RESULTS.md).
 
 Two results argue with the design. **0.44% of frames are confidently, wildly
 wrong** — the mean ANEES of 4.53 is that tail, not a covariance four times too
@@ -110,9 +111,13 @@ and triplet angles. Untried here.
 
 ## M2 — nuScenes
 
-**Blocked on nothing; started.** M1 validated the architecture, and the ingest
-depends on none of its numbers.
-
+**M2a is done and its answer is a qualified yes.** It reduces translation error
+from 1.591 m to 1.049 m open loop, 0.713 m on trusted frames — against 5.2× for
+the same architecture on generated scenes. What it cannot do is the
+observability ablation it was also meant to carry: its detections are cut from
+the map, so they inherit the map's element boundaries, and separating the road's
+geometry from nuScenes' segmentation of it needs a detector that segments
+independently. That is M2b.
 
 nuScenes + map expansion v1.3 on the **geographically disjoint split** (the
 StreamMapNet split; the official train/val scenes overlap spatially and a
@@ -125,8 +130,8 @@ run together their effects cannot be separated.
 **M2a — real map, synthetic detections.** Reuse the existing error model on the
 real map. This proves `prepare_nuscenes.py`, the geographic split and the CAN
 egomotion, and it tests M1's prediction that nuScenes' class set costs 2.3×
-worse longitudinal error. No mapper, no 700 GB of images, and on its own it
-answers "does this backend work on a real map?".
+worse longitudinal error. No mapper and no imagery — 1.6 GB of map and poses —
+and on its own it answers "does this backend work on a real map?".
 
 **M2b — real detections.** Then, and only then, swap in a pretrained mapper's
 output. Because M2a exists, the sim-to-real gap becomes a *measured delta*

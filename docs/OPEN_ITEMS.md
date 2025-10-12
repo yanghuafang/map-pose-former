@@ -3,7 +3,17 @@
 What is unfinished, unverified, or out of scope. A reader should not have to
 infer any of it from an absence.
 
-## The two that matter most
+## What blocks the next milestone
+
+- **The observability ablation does not reproduce on nuScenes.** Removing both
+  along-track classes costs 0.907 m to 0.945 m longitudinal, against 0.322 m to
+  1.367 m for the same experiment on generated scenes. The two informative rows
+  disagree: a drivable-area outline alone recovers 5% of along-track error, as
+  predicted, while lane dividers alone are the best longitudinal arm. nuScenes'
+  lane dividers are 18 m and end at intersections, and M2a cannot say whether
+  those ends belong to the road or to nuScenes' segmentation of it, because its
+  detections are cut from the map. **M2b is the experiment**, not a refinement
+  of this one.
 
 - **0.44% of frames are confidently, wildly wrong.** The median frame is
   calibrated (NEES/dof 0.78) and excluding the tail ANEES is 1.03, so the
@@ -12,16 +22,11 @@ infer any of it from an absence.
   are what would break it. **This blocks closed loop.** The fix is to detect
   them, not to rescale: the match/volume disagreement separates them best
   (25.6% recall at 1% FPR) and is already computed and used for nothing.
-- **The second refinement pass buys nothing measurable**: 0.309 against 0.308
-  with `refine_iters=1` at evaluation, for 2× the step time. The model was
-  trained with two passes, so this is not the same as training with one, but
-  that experiment is cheap and has not been run.
-
-- **No converged accuracy number describes the current code.** The pre-rebuild
-  tables in [RESULTS.md](RESULTS.md) are marked superseded there. Since then a
-  four-arm A/B at 2000 steps has ranked the mechanisms and turned the geometric
-  bias off — not enough to say what any of them is worth at the 37 000 steps M0
-  needed. One seed, one config, synthetic data.
+- **The second refinement pass costs accuracy, not just time**: 0.316 with
+  `refine_iters=1` against 0.336 with two, for half the step time. It read as a
+  wash before the clutter rule was corrected. The model was trained with two
+  passes, so this is not the same as training with one — but the direction has
+  changed and that experiment is now worth its hour.
 - **The reported covariance is optimistic where the map aliases.** The surface is
   computed with correspondences fixed, making it the curvature of the fit rather
   than the ambiguity of the match: measured, it is steeper along track than
@@ -29,23 +34,23 @@ infer any of it from an absence.
 
 ## Not implemented
 
-- **No real data.** Everything is procedurally generated. The numbers bound the
-  backend — whether the architecture can match point sets and recover a pose —
-  and say nothing about localizing a real vehicle.
+- **One real dataset, one split, one seed.** M2a reads nuScenes; Argoverse 2 is
+  the untrained-on generalization test and has not been touched. Every number
+  here is a single run of a single configuration.
 - **No real perception.** Detections are cut from the map and corrupted, so both
-  point sets are the same polylines with noise on top. A real detector produces
+  point sets are the same polylines with noise on top. This is as true of the
+  nuScenes path as of the synthetic one: M2a made the *map* real and left
+  perception an assumption. A real detector produces
   different chunking, geometry that bends the wrong way at range, missing pieces
-  and hallucinated topology, none of which is modelled. A real detector produces
-  different chunking, geometry that bends the wrong way at range, missing pieces
-  and hallucinated topology, none of which is modelled. M2 addresses this by
+  and hallucinated topology, none of which is modelled. M2b addresses this by
   running a pretrained mapper, not by training one.
 - **No closed-loop evaluation.** The prior is drawn from a distribution rather
   than produced by the previous frame's output. M3.
 - **No compression and no deployment.** M4 and M5 — the stated purpose of the
   project, so their absence is the largest gap in it. The static input shapes
   and the parameter-free head anticipate them; neither has been exported.
-- **No map topology.** The synthetic world has none worth the name. It becomes
-  an input at M2.
+- **No map topology.** The synthetic world has none worth the name. nuScenes
+  is the first map here with one; it becomes an input at M2c.
 - **No prior covariance as an input.** Open loop it adds nothing, since the
   prior's spread is a constant the model can learn. It becomes real at M3.
 
@@ -65,22 +70,20 @@ infer any of it from an absence.
 - **Hyperparameters are unswept.** Loss weights, learning rate, model width,
   match radius, IRLS scale, abstention threshold, refinement passes and
   history length are first choices with reasons.
-- **The head rematch has not been run.** The robust solve exists because the
-  plain one lost seven to one out of distribution. Until it is measured against
-  both baselines, the argument in `pose_head.py` is a hypothesis with tests.
-- **The dashed-stripe experiment has not been run.** The machinery is there and
-  `data.sample.stripe_dashed=false` is the control.
-- **The refinement pass has not been ablated alone.** `refine_iters=1` shares
-  weights with a trained checkpoint and can be swept from `tools/eval.py`.
-- **Calibration has never been reported on a trained model.** `Calibration` is
-  correct against synthetic errors. Given the point about the surface above, the
-  honest prior is "ANEES above one".
+- **The head rematch settled nothing.** The robust solve wins heading by a
+  factor of two and still loses translation, in and out of distribution
+  ([RESULTS.md](RESULTS.md)). The parameter-free head is kept for rotation
+  accuracy, interpretability and quantization behaviour, not for RMSE.
+- **`refine_iters=2` has not been ablated in *training*.** Disabling the second
+  pass at evaluation *improves* accuracy — 0.316 against 0.336 — but the model
+  was trained with two, so that is not the same experiment. One run.
 
 ## The model uses the GPU poorly, by shape rather than by accident
 
-About 6% of the A6000's dense bf16 throughput. The cause is `head_dim = 32` —
-every attention matmul contracts over it, and that is far too small to keep a
-tensor core fed. Both models have it: 128-dim over 4 heads, 256 over 8.
+About 6% of the A6000's dense bf16 throughput. The cause is `head_dim = 32`
+in the student — every attention matmul contracts over it, and that is far too
+small to keep a tensor core fed. The teacher already avoids it: 256-dim over the
+same 4 heads is `head_dim = 64`.
 
 Two things are untried, and neither is batch size. **Widening the heads is not
 one of them** — it was tried, and at a fixed `dim` of 128 both one and two heads
@@ -103,17 +106,16 @@ protocol but not used in training.
   cheaper in throughput than it looks. Untried.
 - **`loss.w_cov = 0.1`** may be too weak: ANEES wanders 0.73 to 3.36 across a
   run rather than holding at one.
-- **`refine_iters = 2` has not been ablated on its own**, unlike history. It
-  shares weights with any trained checkpoint, so
-  `tools/eval.py model.refine_iters=1` costs minutes.
 
 ## Rough edges
 
 - **Element caps truncate.** 72 map elements, 32 detections per frame. Overflow
   drops the farthest — the right ordering, but not reported per frame.
-- **Clutter has no class prior.** False positives draw a class uniformly, making
-  a spurious stop line as likely as a spurious lane divider. A real detector's
-  confusions are far more structured.
+- **Clutter has no *structured* confusion model.** False positives now draw
+  from what the frame detected, with multiplicity, so contamination is roughly
+  equal across classes instead of falling on the rare ones — but the draw is
+  still independent of what the class is. A real detector confuses a road
+  boundary for a lane divider far more often than for a traffic light.
 - **`float()` on every loss term each step** forces a GPU sync at the logging
   interval. Immaterial at 50-step logging, worth knowing before profiling.
 - **The smoke run's mass gate refuses everything.** That is the gate working —

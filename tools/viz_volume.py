@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Draw a cost surface over the pose grid, in either of its two senses.
 
     tools/viz_volume.py --mode fit               # the fit's own curvature
@@ -38,7 +39,7 @@ from mapposeformer.config import (
     parse_overrides,
     with_overrides,
 )
-from mapposeformer.data.synthetic import SyntheticDataset
+from mapposeformer.data import build_dataset
 from mapposeformer.model.volume_head import GridParams, grid_cost
 
 _W, _H, _PAD, _TOP = 720, 540, 60, 46
@@ -201,7 +202,7 @@ def main() -> int:
         ]
     cfg = with_overrides(cfg, over)
 
-    sample = SyntheticDataset(cfg.data, args.split)[args.index]
+    sample = build_dataset(cfg.data, args.split)[args.index]
     grid = cfg.model.grid
     # The (forward, left) plane at zero yaw. Marginalising over yaw instead
     # would blur the two surfaces towards each other and hide what differs.

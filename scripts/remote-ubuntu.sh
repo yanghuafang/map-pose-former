@@ -30,6 +30,16 @@ REMOTE_GPU="${MPF_GPU:-auto}"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Kill training on the host. By PID and with a bracketed pattern, because
+# `pkill -f tools/train.py` matches the shell running it -- the string is in
+# its own argument list -- so pkill kills itself, the targets survive, and a
+# following pgrep reports success. That mistake left three runs competing for
+# one GPU for five hours.
+mpf_stop_runs() {
+  ssh "${REMOTE_HOST}" 'for p in $(pgrep -f "train[.]py"); do kill -9 "$p" 2>/dev/null; done
+    sleep 3; echo "still running: $(pgrep -cf "train[.]py")"'
+}
+
 usage() {
   cat <<'EOF'
 Usage: remote-ubuntu.sh [--sync] [--detach] [--shell] [command ...]

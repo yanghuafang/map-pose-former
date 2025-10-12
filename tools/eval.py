@@ -23,7 +23,7 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mapposeformer.config import parse_overrides, with_overrides
-from mapposeformer.data.synthetic import SyntheticDataset
+from mapposeformer.data import build_dataset
 from mapposeformer.engine import evaluate, format_report
 from mapposeformer.model import MapPoseFormer
 
@@ -47,7 +47,7 @@ def main() -> int:
     model.load_state_dict(ckpt["model"])
     model.to(args.device).eval()
 
-    dataset = SyntheticDataset(cfg.data, args.split)
+    dataset = build_dataset(cfg.data, args.split)
     loader = DataLoader(dataset, batch_size=args.batch_size, num_workers=4)
     print(f"{args.checkpoint}  split={args.split}  frames={len(dataset)}")
     print(

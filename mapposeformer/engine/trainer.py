@@ -19,13 +19,24 @@ import time
 from pathlib import Path
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 
 from mapposeformer.config import Config
-from mapposeformer.data.synthetic import SyntheticDataset
+from mapposeformer.data import build_dataset
 from mapposeformer.engine.evaluator import evaluate, format_report
 from mapposeformer.losses import compute_losses
 from mapposeformer.model.model import MapPoseFormer
+
+
+def _hms(seconds: float) -> str:
+    """@brief Seconds as ``1h23m`` or ``4m12s``. @param seconds Duration.
+    @return A short human-readable string."""
+    seconds = max(0.0, seconds)
+    if seconds >= 3600:
+        return f"{int(seconds // 3600)}h{int(seconds % 3600 // 60):02d}m"
+    if seconds >= 60:
+        return f"{int(seconds // 60)}m{int(seconds % 60):02d}s"
+    return f"{seconds:.0f}s"
 
 
 def _lr_scale(step: int, total: int, warmup: int) -> float:
@@ -62,8 +73,8 @@ class Trainer:
         # with no marker between them, which reads as one run that got worse.
         (self.out / "metrics.jsonl").unlink(missing_ok=True)
 
-        self.train_set = SyntheticDataset(cfg.data, "train")
-        self.val_set = SyntheticDataset(cfg.data, "val")
+        self.train_set = build_dataset(cfg.data, "train")
+        self.val_set = build_dataset(cfg.data, "val")
         self.train_loader = self._loader(self.train_set, shuffle=True)
         self.val_loader = self._loader(self.val_set, shuffle=False)
 
@@ -101,7 +112,7 @@ class Trainer:
         self.step = 0
         self.writer = self._writer()
 
-    def _loader(self, dataset: SyntheticDataset, shuffle: bool) -> DataLoader:
+    def _loader(self, dataset: Dataset, shuffle: bool) -> DataLoader:
         return DataLoader(
             dataset,
             batch_size=self.cfg.train.batch_size,
@@ -146,6 +157,7 @@ class Trainer:
             f"{len(self.train_set)} train frames, {self.total_steps} steps, "
             f"device {self.device}"
         )
+        started, start_step = time.time(), self.step
         for epoch in range(cfg.epochs):
             self.train_set.set_epoch(epoch)
             t0, seen = time.time(), 0
@@ -185,10 +197,24 @@ class Trainer:
                     scalars["grad_norm"] = float(grad)
                     scalars["lr"] = self.opt.param_groups[0]["lr"]
                     scalars["frames_per_s"] = seen / (time.time() - t0)
+                    # How long is left, from the rate so far. A training run is
+                    # the one thing here that takes hours, and a reader should
+                    # not have to compute this from a step count and a
+                    # benchmark they have to go and find.
+                    done = self.step - start_step
+                    rate = done / max(time.time() - started, 1e-9)
+                    left = (self.total_steps - self.step) / max(rate, 1e-9)
+                    scalars["eta_min"] = left / 60.0
                     self._log("train", scalars)
                     print(
                         f"epoch {epoch} step {self.step}/{self.total_steps} "
-                        + " ".join(f"{k} {v:.4f}" for k, v in scalars.items())
+                        + " ".join(
+                            f"{k} {v:.4f}"
+                            for k, v in scalars.items()
+                            if k != "eta_min"
+                        )
+                        + f" | {_hms(time.time() - started)} elapsed,"
+                        f" {_hms(left)} left"
                     )
                 if cfg.max_steps and self.step >= cfg.max_steps:
                     break

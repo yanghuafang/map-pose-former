@@ -1,0 +1,31 @@
+# M2a: the real nuScenes map, with detections still cut from it.
+#
+# Everything not listed here is the dataclass default, so the only difference
+# from configs/synth_base.yaml is where the map comes from. Build the cache
+# first with tools/prepare_nuscenes.py; MPF_DATA_ROOT is where scripts/lib.sh
+# puts datasets.
+data:
+  source: nuscenes
+  nuscenes_cache: /DATA/map-pose-former/nuscenes_cache
+  # Keyframes are 2 Hz and the ego covers 4.2 m between them, so stride 2 gives
+  # 8.4 m between training frames -- the 8 m the synthetic config gets from
+  # stride 4 at its 2 m pitch. Matching it keeps the two comparable.
+  frame_stride: 2
+  sample:
+    # 4.2 and 8.4 m behind, against the synthetic 4 and 8. Same reason.
+    history_stride: 1
+model:
+  dim: 128
+  num_layers: 4
+  num_heads: 4
+train:
+  # 80, not 40: the split yields ~4 900 training frames against the synthetic
+  # stage's 29 600, so an epoch is six times smaller. The prior error and the
+  # detector noise are redrawn every epoch, which is what makes repeating a
+  # small set worth more than it would otherwise be.
+  epochs: 80
+  batch_size: 64
+  lr: 3.0e-4
+  num_workers: 16
+  amp: bf16
+  out_dir: runs/nuscenes

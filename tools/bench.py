@@ -27,7 +27,7 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mapposeformer.config import load_config, parse_overrides
-from mapposeformer.data.synthetic import SyntheticDataset
+from mapposeformer.data import build_dataset
 from mapposeformer.losses import compute_losses
 from mapposeformer.model.model import MapPoseFormer
 
@@ -70,7 +70,7 @@ def main() -> int:
         print(f"gpu {torch.cuda.get_device_name(0)}  torch {torch.__version__}")
     print(f"torch threads {torch.get_num_threads()}\n")
 
-    dataset = SyntheticDataset(cfg.data, "train")
+    dataset = build_dataset(cfg.data, "train")
     loader = DataLoader(
         dataset,
         batch_size=bs,
@@ -86,7 +86,7 @@ def main() -> int:
     # costs because generating a scene is expensive, or because the loader is
     # asking for a new one every time. The dataset holds a single scene, so a
     # shuffled sampler misses it on nearly every index.
-    probe = SyntheticDataset(cfg.data, "train")
+    probe = build_dataset(cfg.data, "train")
     per_scene = len(probe._frames)
     probe[0]
     hit = _time(lambda: probe[1], "cpu", 20)

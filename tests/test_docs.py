@@ -63,3 +63,21 @@ def test_training_doc_matches_the_loss_defaults():
     radius = f"within {LossParams().match_radius_m:g} m"
     stale = [s for s in (entries, radius) if s not in doc]
     assert not stale, f"docs/TRAINING.md no longer states: {stale}"
+
+
+def test_the_two_nuscenes_class_lists_agree():
+    """`classes.py` states what nuScenes has; `nuscenes.py` reads it.
+
+    They were written months apart and drifted: the first still claimed stop
+    lines and no point landmarks after the reader had learned that nuScenes'
+    stop-line annotation is unusable and that it carries 307 traffic lights.
+    A wrong list here is invisible -- it is a *claim* about a dataset, so
+    nothing fails, and the synthetic ablation standing in for nuScenes stands
+    in for the wrong thing.
+    """
+    from mapposeformer.data.classes import NUSCENES_AVAILABLE
+    from mapposeformer.data.nuscenes import NUSCENES_CLASSES
+
+    assert sorted(int(c) for c in NUSCENES_AVAILABLE) == sorted(
+        int(c) for c in NUSCENES_CLASSES
+    )

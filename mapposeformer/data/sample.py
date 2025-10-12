@@ -26,6 +26,7 @@ prior leaves here only so evaluation can compose the prediction back.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 
 import torch
@@ -77,8 +78,7 @@ class PriorParams:
     max_lat_m: float = 2.0
     max_yaw_deg: float = 3.0
     """Truncation bounds. They must match the cost-volume grid extent in the
-    model config: a target outside the grid has no correct cell, and the
-    volume loss would be asking for something unrepresentable."""
+    model config; ``config._validate`` refuses a pair that does not."""
 
 
 @dataclass(frozen=True)
@@ -227,7 +227,9 @@ def _pack(
     return out
 
 
-def _crop(world: World, pose: Tensor, keep: set[int]) -> list[Element]:
+def _crop(
+    world: World, pose: Tensor, keep: set[int], radius_m: float
+) -> list[Element]:
     """World elements in ``pose``'s frame, with their padding stripped.
 
     Whole elements, not clipped ones. Callers that need a clip do it
@@ -235,6 +237,18 @@ def _crop(world: World, pose: Tensor, keep: set[int]) -> list[Element]:
     an element's first point, and that point has to be the same one in every
     frame or the stripe pattern would slide with the vehicle and become an
     along-track cue that says where the *crop* is.
+
+    ``radius_m`` is a **pre-filter**, not the crop: it discards elements no
+    caller could keep, before anything is materialised per element. The loop
+    below is Python and its cost tracks the element count, which is 46 for a
+    generated scene and over a thousand for a nuScenes one -- enough that
+    without this the dataloader starves the GPU.
+
+    @param world The scene.
+    @param pose ``(3,)`` the frame to express elements in.
+    @param keep Class ids to retain.
+    @param radius_m Discard elements with no point within this range.
+    @return The surviving elements, in ``pose``'s frame.
     """
     inv = G.inverse(pose)
     local = G.transform_points(inv, world.pts.reshape(-1, 2)).reshape(
@@ -243,15 +257,21 @@ def _crop(world: World, pose: Tensor, keep: set[int]) -> list[Element]:
     valid = torch.arange(world.pts.shape[1]).unsqueeze(
         0
     ) < world.npts.unsqueeze(1)
-    out = []
-    for i in range(len(world)):
-        c = int(world.cls[i])
-        if c not in keep:
-            continue
-        out.append(
-            Element(cls=c, attr=int(world.attr[i]), pts=local[i][valid[i]])
-        )
-    return out
+    # Range and class, both vectorised, both before the loop. Padding is
+    # pushed to infinity so it cannot make an element look near.
+    rng = local.norm(dim=-1).masked_fill(~valid, float("inf"))
+    near = rng.min(dim=1).values <= radius_m
+    wanted = torch.zeros(len(world), dtype=torch.bool)
+    for c in keep:
+        wanted |= world.cls == c
+    chosen = (near & wanted).nonzero(as_tuple=False).flatten().tolist()
+
+    # One tensor-to-list conversion instead of two per element.
+    cls_of, attr_of = world.cls.tolist(), world.attr.tolist()
+    return [
+        Element(cls=cls_of[i], attr=attr_of[i], pts=local[i][valid[i]])
+        for i in chosen
+    ]
 
 
 def _visible_map(el: list[Element], radius: float) -> list[Element]:
@@ -331,6 +351,37 @@ def _visible_camera(
     return out
 
 
+def _draw_class(pool: Sequence[int], gen: torch.Generator) -> int:
+    """A class for a false positive, or for a mislabelled true one.
+
+    Drawn from **what this frame actually saw, with multiplicity**, so a class
+    is hallucinated about as often as it is detected. Two simpler rules were
+    tried first, and each distorted the observability ablation:
+
+    * *Uniform over the enum.* A third of clutter took classes nuScenes has
+      none of, so it could never match anything, and restricting
+      ``keep_classes`` removed that garbage along with the evidence.
+    * *Uniform over the classes the scene contains.* Equal clutter on unequal
+      populations contaminates rare classes hardest. Measured on the nuScenes
+      test split: 10.0 road boundaries per frame against 0.7 traffic signs,
+      0.5 clutter elements each, so 4.7% noise on one class and 42.9% on the
+      other -- and the rare classes are the along-track anchors the ablation
+      exists to weigh.
+
+    Multiplicity equalises the ratio instead of the count, leaving every class
+    at ``clutter_mean / total``, so the ablation compares classes rather than
+    their contamination. All three rules agree on generated scenes, which hold
+    every class in comparable numbers; a real map is not balanced.
+
+    @param pool The frame's own detected classes, or the world's when nothing
+        has been detected yet.
+    @param gen The frame's generator.
+    @return One of ``pool``.
+    """
+    i = int(torch.randint(0, len(pool), (1,), generator=gen).item())
+    return pool[i]
+
+
 def _confidence(
     rng_m: float, p: PerceptionParams, gen: torch.Generator, clutter: bool
 ) -> float:
@@ -367,10 +418,16 @@ def _reported_sigma(
 
 
 def _corrupt(
-    el: list[Element], p: PerceptionParams, gen: torch.Generator
+    el: list[Element],
+    p: PerceptionParams,
+    gen: torch.Generator,
+    classes: tuple[int, ...],
 ) -> list[Element]:
     """The detector's error model: dropout, bias, noise, clutter, mislabel."""
     out = []
+    # What this frame has detected so far, with repeats: the pool clutter and
+    # mislabels draw from. See :func:`_draw_class`.
+    seen: list[int] = []
     for e in el:
         q = e.pts
         if torch.rand(1, generator=gen).item() < p.element_dropout:
@@ -395,7 +452,8 @@ def _corrupt(
         )
         cls = e.cls
         if torch.rand(1, generator=gen).item() < p.class_flip_prob:
-            cls = int(torch.randint(0, NUM_CLASSES, (1,), generator=gen).item())
+            cls = _draw_class(seen or classes, gen)
+        seen.append(cls)
         mean_rng = float(rng.mean())
         out.append(
             Element(
@@ -417,7 +475,7 @@ def _corrupt(
         )
         ang = (2 * float(torch.rand(1, generator=gen).item()) - 1) * half
         base = torch.tensor([rng * math.cos(ang), rng * math.sin(ang)])
-        c = int(torch.randint(0, NUM_CLASSES, (1,), generator=gen).item())
+        c = _draw_class(seen or classes, gen)
         conf = _confidence(rng, p, gen, clutter=True)
         if torch.rand(1, generator=gen).item() < 0.5:
             pts = base.view(1, 2)
@@ -446,10 +504,16 @@ def _detect(
     """One frame of detections, in the true ego frame at ``pose``."""
     wp = world.params
     el = _visible_camera(
-        _crop(world, pose, keep), sp.perception, wp, sp.stripe_dashed
+        _crop(world, pose, keep, sp.perception.max_range_m),
+        sp.perception,
+        wp,
+        sp.stripe_dashed,
+    )
+    present = tuple(
+        sorted({int(c) for c in world.cls.unique().tolist()} & keep)
     )
     return _pack(
-        _corrupt(el, sp.perception, gen),
+        _corrupt(el, sp.perception, gen, present or tuple(sorted(keep))),
         sp.max_det_elements,
         sp.points_per_element,
     )
@@ -521,7 +585,9 @@ def build_sample(
     prior = G.compose(gt, err)
     delta = G.relative(prior, gt)
 
-    map_el = _visible_map(_crop(map_world, prior, keep), sp.map_radius_m)
+    map_el = _visible_map(
+        _crop(map_world, prior, keep, sp.map_radius_m), sp.map_radius_m
+    )
     m = _pack(map_el, sp.max_map_elements, sp.points_per_element)
     d = _detect(world, gt, keep, sp, gen)
 

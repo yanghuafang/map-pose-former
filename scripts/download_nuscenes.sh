@@ -2,7 +2,7 @@
 
 # download_nuscenes.sh -- nuScenes, for the real-data milestone.
 #
-#   ./scripts/download_nuscenes.sh           # 1.6 GB: everything M3 needs
+#   ./scripts/download_nuscenes.sh           # 1.6 GB: everything M2a needs
 #   ./scripts/download_nuscenes.sh --mini    # ...and the 4 GB mini sensor split
 #   ./scripts/download_nuscenes.sh --blobs   # ...and 316 GB of camera and lidar
 #   ./scripts/download_nuscenes.sh --force   # discard what is there and refetch
@@ -24,9 +24,9 @@
 #   nuScenes-map-expansion-v1.3.zip   the HD map, which is the whole point
 #   can_bus.zip                       egomotion, replacing differenced ground truth
 #
-# The blobs matter only if a real detector is ever put in front of this --
-# MapTR or StreamMapNet output fed in as detections. Until then they are 316 GB
-# that nothing reads.
+# The blobs matter at M2b, where a pretrained mapper -- MapTR or StreamMapNet --
+# reads the 53 GB of keyframe images inside them and its output is fed in as
+# detections. Until then they are 316 GB that nothing reads.
 
 set -euo pipefail
 # Remember the name before the cd: $0 is relative to where the caller

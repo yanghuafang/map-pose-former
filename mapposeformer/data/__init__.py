@@ -1,4 +1,4 @@
-"""Datasets: procedural worlds now, nuScenes next (``docs/ROADMAP.md``)."""
+"""Datasets: procedural worlds and nuScenes, behind one contract."""
 
 from mapposeformer.data.classes import (
     NUM_ATTRS,
@@ -6,7 +6,7 @@ from mapposeformer.data.classes import (
     LandmarkClass,
     MarkType,
 )
-from mapposeformer.data.dataset import DataParams
+from mapposeformer.data.dataset import DataParams, build_dataset
 from mapposeformer.data.sample import (
     EgoParams,
     Element,
@@ -37,6 +37,7 @@ __all__ = [
     "SyntheticDataset",
     "World",
     "WorldParams",
+    "build_dataset",
     "build_sample",
     "build_world",
     "chunk_for_map",
