@@ -442,6 +442,8 @@ class NuScenesDataset(Dataset):
         self.stride = params.frame_stride
         self.margin = params.edge_margin
         self._cache: dict[str, tuple[World, World]] = {}
+        self._dets: dict[str, object] = {}
+        self.detections_dir = params.detections_dir
         self._index: list[tuple[str, int]] = []
         sp = params.sample
         lo = max(self.margin, sp.history * sp.history_stride)
@@ -499,4 +501,22 @@ class NuScenesDataset(Dataset):
         # two sides never share an element boundary. They are still the same
         # polylines with noise on top -- that is M2a's scope, and what M2b
         # replaces with a detector's own geometry.
-        return build_sample(world, chunked, frame, seed, self.p.sample)
+        return build_sample(
+            world, chunked, frame, seed, self.p.sample, self._detector(name)
+        )
+
+    def _detector(self, name: str):
+        """@brief A real detector's output for one scene, if configured.
+
+        @param name Scene name.
+        @return A ``frame -> rows`` callable, or None for the synthetic path.
+        """
+        if not self.detections_dir:
+            return None
+        if name not in self._dets:
+            from mapposeformer.data.detections import load_scene
+
+            self._dets[name] = load_scene(
+                Path(self.detections_dir) / f"{name}.npz"
+            )
+        return self._dets[name].frame

@@ -494,6 +494,40 @@ def _corrupt(
     return out
 
 
+def _from_detector(
+    rows: dict[str, Tensor], keep: set[int], sp: SampleParams
+) -> dict[str, Tensor]:
+    """Pack what a real detector reported at one keyframe.
+
+    No error model runs: these are already wrong in a detector's own way, and
+    corrupting them further would model the same failure twice. The sigma a
+    synthetic detection carries is replaced by a constant, because a real
+    mapper reports a score and not a covariance -- if one ever does, this is
+    where it arrives.
+
+    @param rows One keyframe's elements, from
+        :meth:`~mapposeformer.data.detections.SceneDetections.frame`.
+    @param keep Class ablation.
+    @param sp Cropping and tokenisation.
+    @return The same packed tensors ``_detect`` returns.
+    """
+    kept = [
+        Element(
+            cls=int(rows["cls"][i]),
+            attr=int(MarkType.NONE),
+            pts=rows["pts"][i, : int(rows["npts"][i])],
+            conf=float(rows["conf"][i]),
+            sigma=(
+                sp.perception.point_sigma_m,
+                sp.perception.element_bias_sigma_m,
+            ),
+        )
+        for i in range(len(rows["cls"]))
+        if int(rows["cls"][i]) in keep
+    ]
+    return _pack(kept, sp.max_det_elements, sp.points_per_element)
+
+
 def _detect(
     world: World,
     pose: Tensor,
@@ -543,7 +577,12 @@ def _measured_egomotion(
 
 
 def build_sample(
-    world: World, map_world: World, frame: int, seed: int, sp: SampleParams
+    world: World,
+    map_world: World,
+    frame: int,
+    seed: int,
+    sp: SampleParams,
+    detector=None,
 ) -> dict[str, Tensor]:
     """One frame: anchored map, anchored detections, history, and the transform.
 
@@ -589,14 +628,20 @@ def build_sample(
         _crop(map_world, prior, keep, sp.map_radius_m), sp.map_radius_m
     )
     m = _pack(map_el, sp.max_map_elements, sp.points_per_element)
-    d = _detect(world, gt, keep, sp, gen)
+    if detector is None:
+        d = _detect(world, gt, keep, sp, gen)
+    else:
+        d = _from_detector(detector(frame), keep, sp)
 
     # --- The past, in its own frames, plus the egomotion that moves it here.
     hist, rel = [], []
     for k in range(1, sp.history + 1):
         f = max(0, frame - k * sp.history_stride)
         past = world.trajectory[f]
-        hist.append(_detect(world, past, keep, sp, gen))
+        if detector is None:
+            hist.append(_detect(world, past, keep, sp, gen))
+        else:
+            hist.append(_from_detector(detector(f), keep, sp))
         rel.append(_measured_egomotion(gt, past, sp.ego, gen))
     e, p = sp.max_det_elements, sp.points_per_element
 

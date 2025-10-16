@@ -43,7 +43,8 @@ M0's ablations pointed at the design rather than the hyperparameters:
   follows in closed form from statistics the pose head already had.
 - **The pose head is robust.** Abstentions gated relative to the frame's
   strongest match, then Geman-McClure reweighting twice. This repairs the head
-  losing seven to one out of distribution.
+  losing to its own baseline out of distribution. [RESULTS.md](RESULTS.md) has
+  the rematch.
 - **`mass` is a gate.** The `[2,3,4,5]` ablation produced 14 m of error with
   9.97 m of it trusted; the evaluator now refuses on evidence separately.
 - **Matching runs twice**, the second pass on detections re-anchored by the
@@ -111,70 +112,85 @@ and triplet angles. Untried here.
 
 ## M2 — nuScenes
 
-**M2a is done and its answer is a qualified yes.** It reduces translation error
-from 1.591 m to 1.049 m open loop, 0.713 m on trusted frames — against 5.2× for
-the same architecture on generated scenes. What it cannot do is the
-observability ablation it was also meant to carry: its detections are cut from
-the map, so they inherit the map's element boundaries, and separating the road's
-geometry from nuScenes' segmentation of it needs a detector that segments
-independently. That is M2b.
+**M2a is done and its answer is a qualified yes; M2b has a contract and no
+detector; M2c is unstarted.**
+
+M2a asked whether this backend works on a real map. It does — 1.591 m to
+1.049 m open loop, 0.713 m on trusted frames — and it works far less well than
+on generated scenes, where the same architecture reaches 5.2×. What M2a cannot
+do is the observability ablation it was also meant to carry: its detections are
+cut from the map, so they inherit the map's element boundaries, and the one
+class whose ends fall inside the crop is the one that recovers along-track
+position. Separating the road's geometry from nuScenes' segmentation of it
+needs a detector that segments independently, which is M2b.
 
 nuScenes + map expansion v1.3 on the **geographically disjoint split** (the
 StreamMapNet split; the official train/val scenes overlap spatially and a
 localizer evaluated on it is partly reciting).
 
-**Two phases, because bundling them makes the result unreadable.** The ingest
-and the sim-to-real step are independent, they fail for different reasons, and
-run together their effects cannot be separated.
+**Three phases, because bundling changes makes their effects unreadable.** The
+ingest, the sim-to-real step and the model change fail for different reasons,
+and run together nothing can be attributed to any of them.
+
+The ingest and the geographic split are *one* phase, not two: a split cannot be
+tested without an ingest to produce poses, and an ingest whose split leaks is
+worthless. Everything else is separable and therefore separated.
 
 **M2a — real map, synthetic detections.** Reuse the existing error model on the
 real map. This proves `prepare_nuscenes.py`, the geographic split and the CAN
-egomotion, and it tests M1's prediction that nuScenes' class set costs 2.3×
-worse longitudinal error. No mapper and no imagery — 1.6 GB of map and poses —
-and on its own it answers "does this backend work on a real map?".
+egomotion, and it tests M1's prediction that dropping point landmarks costs
+longitudinal error — though not the figure M1 attached to it, which stood in
+for nuScenes with a class set the map turned out not to have. No mapper and no
+imagery — 1.6 GB of map and poses — and on its own it answers "does this backend
+work on a real map?".
 
 **M2b — real detections.** Then, and only then, swap in a pretrained mapper's
 output. Because M2a exists, the sim-to-real gap becomes a *measured delta*
 against it rather than a number confounded with everything else that changed.
 
-**The detections must be real, and this is a change of plan.** Cutting them from
-the map and corrupting them upgrades the *map* to real and leaves perception an
-assumption — and leaves both point sets as the same polylines with noise: same
-chunking, same vertex counts, same topology. A real detector gets none of that
-right. The correlated-bias model captures the statistical part and none of the
-structural part.
+The contract is written and tested; the detector is not run.
+`mapposeformer/data/detections.py` defines a file format -- one `.npz` per
+scene, elements in that keyframe's ego frame -- and `data.detections_dir` makes
+the dataset read it instead of cutting from the map. A stub exercises the whole
+path in `tests/test_detections.py`.
 
-So: **run a pretrained online mapper, do not train one.** MapTRv2 or
-StreamMapNet inference over the nuScenes cameras, once, offline, cached. The
-scope decision is unchanged — perception stays an input — but the inputs stop
-being a corrupted copy of the answer.
+**The detector runs in its own environment, and this is a boundary rather than
+a problem.** MapTR and StreamMapNet are written against `mmdet3d 1.0.0rcX` and
+`mmcv 1.x`, which cap at Python 3.10 and torch 2.0; this project runs 3.12 and
+torch 2.11. Nothing in `mapposeformer` imports the detector, so neither
+constrains the other's dependencies -- the same rule already drawn around the
+nuScenes devkit.
 
-Four things change:
+Two checks stand between a detector's output and a number worth reporting.
+`validate` rejects a malformed file. `plausibility` catches the failure it
+cannot see: a mirrored axis or a camera-convention frame produces a file that
+validates perfectly and trains to a confidently wrong answer, so applying the
+ground-truth correction must land the detections on the map. The synthetic path
+scores about 0.9; near zero means a convention error rather than a weak
+detector.
 
-- an offline `tools/prepare_nuscenes.py` writing the tensors this project
-  already consumes, so the training loop never imports the devkit
-- a pretrained mapper's output as `det_*`, its scores as `det_conf`
-- egomotion from the CAN bus, replacing differenced ground truth
-- **no poles and no traffic signs**: the map expansion carries neither, so
-  along-track observability is structurally weaker. M1's ablation predicts 2.3×
-  worse longitudinal error, and this milestone checks that prediction.
+What remains is the detector itself: a second conda environment, a checkpoint,
+and one inference pass over the 53 GB of keyframe images already on disk.
 
-**Map topology becomes an input here**, because this is the first map with any.
-A real vector map is a graph: lanes have predecessors, successors and neighbours,
+**M2c — map topology as an input.** A real vector map is a graph, and this is
+the first map here with one: lanes have predecessors, successors and neighbours,
 and two boundaries of the *same* lane are more mutually informative than two
-that happen to be parallel. Cheapest first — a per-element embedding of its
-topological role — then an adjacency bias on map self-attention, the same
-mechanism `GeometricBias` provides for cross-attention. The synthetic world has
-no topology worth the name, so building this earlier would mean inventing the
-thing the experiment is meant to test.
+that merely run parallel. Cheapest first — a per-element embedding of its
+topological role — then an additive bias on map self-attention scores, keyed to
+whether two elements are adjacent in the graph.
 
-Argoverse 2 afterwards as a generalization test, never trained on. Its lane
-boundaries carry `mark_type`, which is the real-data version of the dash
-experiment.
+Separate from M2b for the reason M2b is separate from M2a: it is a **model**
+change measured on unchanged data, so it ablates cleanly against M2a's
+checkpoint. Folded into M2b it would confound "real detections" with "knows the
+lane graph" and neither number would mean anything.
 
-`scripts/download_nuscenes.sh` and `scripts/download_argoverse2.sh` fetch both;
-run them by hand, since nuScenes' terms are accepted by a person. The camera
-archives are needed as well as the map, because the mapper reads images.
+Building it earlier was impossible rather than merely unwise — the synthetic
+world has no topology worth the name, so it would have meant inventing the thing
+the experiment is meant to test.
+
+Argoverse 2 comes after all three, as a generalization test never trained on.
+Its lane boundaries carry `mark_type`, which is the real-data version of the
+dash experiment.
 
 ## M3 — Closed loop
 
@@ -201,8 +217,9 @@ cell.
 
 ## M4 — Compression
 
-**Neither model is trained yet.** `synth_teacher.yaml` and `synth_base.yaml` are
-configurations, and nothing in this milestone is implemented.
+**Nothing in this milestone is implemented.** The student is trained — it is
+M1's converged baseline — but the teacher has never been run beyond
+`tools/bench.py`, and there is no distillation, pruning or quantization code.
 
 | | student | teacher |
 |---|---|---|

@@ -30,6 +30,11 @@ class DataParams:
     """``synthetic`` or ``nuscenes``. The two produce identical tensors; what
     differs is whether the map is generated or surveyed. See
     ``data/nuscenes.py`` and ``docs/ROADMAP.md`` (M2a)."""
+    detections_dir: str = ""
+    """Where a detector wrote its output, one ``.npz`` per scene. Empty means
+    detections are cut from the map instead -- the synthetic path, which is
+    M2a. See ``data/detections.py`` for the format and why the detector cannot
+    run in this environment."""
     nuscenes_cache: str = ""
     """Where ``tools/prepare_nuscenes.py`` wrote its output. Required when
     ``source`` is ``nuscenes``, unused otherwise."""

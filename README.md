@@ -105,7 +105,8 @@ survive, which TensorRT needs.
   map on a geographically disjoint split — see [ROADMAP.md](docs/ROADMAP.md).
 - **Perception is an input.** No detector is trained, and none has been run yet:
   detections are still cut from the map and corrupted, on both datasets. M2b
-  swaps in a pretrained online mapper's output.
+  swaps in a pretrained online mapper's output; the file contract for it is
+  written and tested.
 - **Open loop only.** The prior is drawn from a distribution, not produced by
   the previous frame.
 
