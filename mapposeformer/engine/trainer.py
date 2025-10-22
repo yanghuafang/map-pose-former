@@ -23,6 +23,11 @@ from torch.utils.data import DataLoader, Dataset
 
 from mapposeformer.config import Config
 from mapposeformer.data import build_dataset
+from mapposeformer.distill import (
+    check_shapes_agree,
+    distill_losses,
+    load_teacher,
+)
 from mapposeformer.engine.evaluator import evaluate, format_report
 from mapposeformer.losses import compute_losses
 from mapposeformer.model.model import MapPoseFormer
@@ -81,6 +86,17 @@ class Trainer:
         self.model = MapPoseFormer(cfg.model).to(self.device)
         if cfg.train.compile:
             self.model = torch.compile(self.model)
+
+        # The teacher runs beside the student, not before it: the synthetic
+        # dataset redraws its noise every epoch, so a cached forward pass would
+        # be answering about a frame the student never sees. Costs a forward
+        # pass; docs/ROADMAP.md has what that is worth.
+        self.teacher = None
+        if cfg.distill.teacher:
+            self.teacher = load_teacher(cfg.distill.teacher, self.device)
+            check_shapes_agree(cfg.model, self.teacher.p)
+            n = sum(p.numel() for p in self.teacher.parameters()) / 1e6
+            print(f"distilling from {cfg.distill.teacher} ({n:.2f}M params)")
         # No weight decay on norms, biases or embeddings: decaying a LayerNorm
         # gain pulls it towards zero, which is not a smaller model, only a
         # quieter one.
@@ -171,6 +187,15 @@ class Trainer:
                     total, scalars = compute_losses(
                         out, batch, cells, pitch, self.cfg.loss
                     )
+                    if self.teacher is not None:
+                        with torch.no_grad():
+                            ref = self.teacher(batch)
+                        kd, kd_scalars = distill_losses(
+                            out, ref, self.cfg.distill
+                        )
+                        total = total + kd
+                        scalars.update(kd_scalars)
+                        scalars["loss"] = float(total.detach())
 
                 # Divided by the accumulation count, because the gradients of
                 # the micro-batches are summed and the objective is their mean.

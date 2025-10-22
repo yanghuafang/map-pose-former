@@ -164,6 +164,19 @@ Lane geometry recovers essentially nothing along track (1.367 against a 1.497
 prior) while recovering 83% laterally — the asymmetry this project exists to
 measure.
 
+### Compressed
+
+Same student, taught by a 25.8 M teacher instead of trained alone:
+
+| | params | test trans | recall @25cm |
+|---|---|---|---|
+| teacher | 25.83 M | 0.218 | 96.7% |
+| student, alone | 2.28 M | 0.336 | 96.0% |
+| student, distilled | 2.28 M | **0.264** | 95.5% |
+
+21% of the translation error, at identical deployment cost — the teacher is
+discarded after training.
+
 ### On a real map
 
 nuScenes, geographically disjoint split, same architecture: **1.591 m to

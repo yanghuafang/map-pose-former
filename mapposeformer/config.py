@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from mapposeformer.data.dataset import DataParams
+from mapposeformer.distill import DistillParams
 from mapposeformer.losses import LossParams
 from mapposeformer.model.model import ModelParams
 
@@ -67,6 +68,43 @@ class Config:
     model: ModelParams = field(default_factory=ModelParams)
     loss: LossParams = field(default_factory=LossParams)
     train: TrainParams = field(default_factory=TrainParams)
+    distill: DistillParams = field(default_factory=DistillParams)
+
+
+def upgrade(obj: Any) -> Any:
+    """@brief Give a config unpickled from an old checkpoint its newer fields.
+
+    A checkpoint stores the ``Config`` that produced it, which is what makes a
+    run reproducible -- and what makes every stored config a hostage to the
+    next field added to the dataclass. Unpickling restores the attributes that
+    existed when it was written and no others, so a config saved before
+    ``distill`` existed has no ``distill``, and the first
+    ``dataclasses.replace`` raises ``AttributeError`` on a field nobody asked
+    about.
+
+    So missing fields are filled from their defaults, recursively. A default is
+    the right answer here by construction: the run predates the field, so it
+    cannot have depended on it, and the default is what "not configured" means
+    everywhere else.
+
+    @param obj A dataclass instance, possibly missing fields.
+    @return The same object, mutated in place, for convenience.
+    """
+    if not dataclasses.is_dataclass(obj):
+        return obj
+    for f in dataclasses.fields(obj):
+        if not hasattr(obj, f.name):
+            if f.default is not dataclasses.MISSING:
+                value = f.default
+            elif f.default_factory is not dataclasses.MISSING:
+                value = f.default_factory()
+            else:
+                continue
+            # object.__setattr__, because most of these dataclasses are frozen.
+            object.__setattr__(obj, f.name, value)
+        else:
+            upgrade(getattr(obj, f.name))
+    return obj
 
 
 def with_overrides(obj: Any, values: dict[str, Any]) -> Any:

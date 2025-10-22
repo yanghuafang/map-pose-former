@@ -234,7 +234,16 @@ In this order, because each stage changes what the next works with:
 
 1. **Distillation, teacher → student**, on the assignment matrix and the cost
    surface. Both are distributions, so KL is natural, and the teacher's soft
-   assignment carries far more than its pose.
+   assignment carries far more than its pose — a label says which map point is
+   correct, the teacher says which of the wrong ones were plausible. The pose
+   is not distilled: it is three numbers the ground truth already gives
+   exactly. Written, in `mapposeformer/distill.py`, and not yet run.
+
+   The assignment row is completed with the mass it withholds before the
+   divergence is taken, so a student that matches everything cannot score the
+   same as one that abstains correctly. The teacher runs live rather than
+   cached, because the synthetic dataset redraws its noise every epoch and a
+   cached pass would describe a frame the student never sees.
 2. **Structured pruning of the student**: attention heads and FFN channels, not
    unstructured masks — `torch.nn.utils.prune` zeros weights without removing
    them, which gives no GPU speedup. Prune, fine-tune, re-measure.

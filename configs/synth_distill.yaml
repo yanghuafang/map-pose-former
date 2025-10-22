@@ -1,0 +1,25 @@
+# The student, distilled from the teacher rather than trained alone.
+#
+# Everything about the student is synth_base.yaml; the only difference is that
+# the teacher's assignment and cost surface are added to the objective. Point
+# distill.teacher at a checkpoint and the run becomes a distillation; leave it
+# empty and this file is synth_base.yaml with a different out_dir.
+#
+# The teacher runs live rather than cached: the synthetic dataset redraws its
+# noise every epoch, so a cached pass would describe a frame the student never
+# sees. That is why this costs ~2x the student's own step time.
+data:
+  num_scenes: {train: 800, val: 60, test: 120}
+model:
+  dim: 128
+  num_layers: 4
+  num_heads: 4
+distill:
+  teacher: runs/teacher/best.pt
+train:
+  epochs: 40
+  batch_size: 64
+  lr: 3.0e-4
+  num_workers: 16
+  amp: bf16
+  out_dir: runs/distilled

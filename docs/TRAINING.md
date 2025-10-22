@@ -62,6 +62,18 @@ from a step count and a benchmark:
 epoch 3 step 1200/12000 loss 7.42 ... frames_per_s 182.4 | 7m03s elapsed, 1h03m left
 ```
 
+## Distillation
+
+`configs/synth_distill.yaml`, or `distill.teacher=<checkpoint>` on any run. Two
+extra terms appear in the log — `kd_match` on the assignment and `kd_volume` on
+the cost surface — and the teacher's architecture is read back from its own
+checkpoint, so only the output shapes have to agree. Width, depth and head
+count are free, which is the point.
+
+The teacher runs beside the student rather than being cached, at roughly 2× the
+step time. Caching needs the same frame twice, and the synthetic dataset
+redraws its noise every epoch.
+
 ## Reading the metrics
 
 `tools/eval.py` prints four blocks:

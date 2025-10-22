@@ -210,6 +210,55 @@ will report physics running backwards.** Four real bugs were found and fixed
 while it was broken, and each fix looked like progress because the numbers
 moved.
 
+## M4 — distillation
+
+`configs/synth_teacher.yaml` then `configs/synth_distill.yaml`, both step-matched
+to the 37 000 steps M1 needed. Test split, 8 880 frames.
+
+| | params | trans | long | lat | yaw | recall @0.25 m, 0.5° |
+|---|---|---|---|---|---|---|
+| teacher | 25.83 M | 0.218 | 0.198 | 0.091 | 0.220° | 96.7% |
+| student, trained alone | 2.28 M | 0.336 | 0.322 | 0.095 | 0.209° | 96.0% |
+| **student, distilled** | 2.28 M | **0.264** | 0.246 | 0.097 | 0.215° | 95.5% |
+
+**Distillation is worth 21% of translation error at zero deployment cost.** The
+student is the same size and the same latency; the teacher is discarded after
+training. On the validation split, where both were selected, it closes 70% of
+the teacher–student gap: 0.3048 to 0.2415 against a teacher at 0.2142.
+
+| | val trans | best at step | of |
+|---|---|---|---|
+| teacher | 0.2142 | 29 600 | 37 000 |
+| student, alone | 0.3048 | 33 300 | 37 000 |
+| student, distilled | 0.2415 | 17 575 | 37 000 |
+
+**The distilled student converged in half the budget** and did not improve over
+the remaining 19 000 steps. Distillation is a denser signal than the labels --
+every one of 768 × 576 correspondences carries an opinion, where the pose loss
+carries three numbers -- so it is not surprising that it gets there sooner. It
+does mean the 7.9 h run could have been 4 h.
+
+**Recall fell while RMSE improved**, 96.0% to 95.5% at 25 cm. Matching a
+teacher's soft assignment pulls in the tail instead of sharpening the median:
+the student trades a few near-misses for far fewer large errors. Both numbers
+are reported because quoting only the RMSE would hide the trade.
+
+### What the two KD terms did
+
+| step | `kd_match` | `kd_volume` | ratio |
+|---|---|---|---|
+| 50 | 5.02 | 139.74 | 28× |
+| 6 300 | 0.50 | 2.60 | 5.2× |
+| 36 400 | 0.035 | 0.076 | 2.2× |
+
+The weights are `w_match = 1.0` against `w_volume = 0.5`, so the surface term
+was contributing an order of magnitude more gradient than intended at the start
+and roughly the intended share by the end. An earlier smoke run against an
+*untrained* teacher gave a ratio of 1:10 000 in the other direction, because two
+models that both withhold most of their assignment mass agree about doing so.
+Rebalancing the weights on either measurement would have been wrong; the ratio
+is a function of how converged the teacher is, not of the weights.
+
 ## M1 — the observability ablation
 
 One checkpoint, evaluated under less evidence. Only what the model may see
