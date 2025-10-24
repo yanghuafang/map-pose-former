@@ -68,3 +68,44 @@ equivariance question open for the matcher to answer, which is where it
 belongs. A point landmark has no direction — a pole is one point — so
 `oriented` says so instead of inventing a heading the matcher would then trust.
 
+## Stage 2 — match, and assign
+
+`model/matcher.py`, `model/attention.py`.
+
+### What the two attentions are for
+
+Rounds of **self-attention** for context (which of four parallel lines is this,
+given the kerb to the left and the stop line ahead) and **cross-attention** for
+matching. The score carries the relative geometry between tokens, because four
+lane dividers in a row look alike by construction and what separates them is
+where each sits relative to everything else.
+
+Where that geometry enters decides what the network is invariant to, and all
+three choices are implemented so the question can be measured:
+
+| mode | the offset is measured in | invariant to |
+|---|---|---|
+| `relative` | the query element's own frame | any rigid motion of the scene |
+| `rope` | the shared frame, LightGlue-style rotary | translation only |
+| `absolute` | nothing; positions added to tokens | whatever it learns |
+
+`rope` is what point tokens run. Its weaker invariance is a feature rather
+than a compromise: the prior pins heading to within 3°, so map and detections
+arrive nearly aligned, and "this detection points the way that map element
+does" is real evidence that full equivariance throws away — worth 9.2
+percentage points of recall at 7.6 standard deviations over `absolute`.
+`relative` needs an N × N bias tensor, which over 1 344 tokens costs 2.4× the
+step time for 2.5% of accuracy, so the rotary encoding is how relative
+position gets in without one.
+
+Then **LightGlue's partial assignment**: a dual softmax, so a pair has to be
+each other's best match rather than merely a good one, gated by a matchability
+score per token. Matchability is what lets a detection match *nothing* —
+clutter, a false positive, a landmark outside the crop — instead of forcing its
+mass onto whichever map element is least implausible.
+
+At point resolution that product **is** the assignment the solve wants —
+`(B, 768, 576)`, one weight per detected point and map point — so there is no
+second stage, and with it goes the defect that a detection spanning four map
+chunks cannot tell its own points apart.
+
