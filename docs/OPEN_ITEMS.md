@@ -109,6 +109,16 @@ protocol but not used in training.
 
 ## Rough edges
 
+- **Attention heads cannot be pruned**, because `SelfBlock`, `CrossBlock` and
+  `AttentionPool` use `nn.MultiheadAttention`, which requires its internal
+  projection width to equal `embed_dim`. Dropping a head makes the two differ
+  and the module cannot express it, so structured pruning reaches the
+  feed-forwards only — 46% of the student's parameters. Replacing it with an
+  explicit `scaled_dot_product_attention` would allow head pruning *and* stop
+  materialising the attention matrix, which is wanted below for its own sake.
+- **Pruning scores by weight magnitude**, which ignores what the activations
+  do. A Taylor or activation-aware criterion is the obvious next thing to try,
+  and the prune/fine-tune/re-measure cycle is what would say whether it pays.
 - **Element caps truncate.** 72 map elements, 32 detections per frame. Overflow
   drops the farthest — the right ordering, but not reported per frame.
 - **Clutter has no *structured* confusion model.** False positives now draw

@@ -244,9 +244,15 @@ In this order, because each stage changes what the next works with:
    same as one that abstains correctly. The teacher runs live rather than
    cached, because the synthetic dataset redraws its noise every epoch and a
    cached pass would describe a frame the student never sees.
-2. **Structured pruning of the student**: attention heads and FFN channels, not
+2. **Structured pruning of the student**: feed-forward channels, not
    unstructured masks — `torch.nn.utils.prune` zeros weights without removing
-   them, which gives no GPU speedup. Prune, fine-tune, re-measure.
+   them, which gives no GPU speedup. Prune, fine-tune, re-measure. Written, in
+   `mapposeformer/prune.py`, and not yet run: half the channels takes the
+   student from 2.28 M parameters to 1.76 M before any fine-tuning.
+
+   Attention heads were meant to be the other half of this and are not
+   reachable — `nn.MultiheadAttention` ties its projection width to
+   `embed_dim`. [OPEN_ITEMS.md](OPEN_ITEMS.md) has what would change that.
 3. **Quantization of the student**: PTQ for the calibration curve, then QAT with
    `nvidia-modelopt`. The Procrustes head is arithmetic rather than weights, and
    the cost surface is a closed form over the same statistics — so the part of

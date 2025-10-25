@@ -21,7 +21,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from mapposeformer.config import Config
+from mapposeformer.config import Config, upgrade
 from mapposeformer.data import build_dataset
 from mapposeformer.distill import (
     check_shapes_agree,
@@ -84,6 +84,8 @@ class Trainer:
         self.val_loader = self._loader(self.val_set, shuffle=False)
 
         self.model = MapPoseFormer(cfg.model).to(self.device)
+        if cfg.train.init_from:
+            self._init_from(cfg.train.init_from)
         if cfg.train.compile:
             self.model = torch.compile(self.model)
 
@@ -162,6 +164,30 @@ class Trainer:
     def _grid(self):
         volume = getattr(self.model, "_orig_mod", self.model).volume
         return volume.cells, volume.pitch
+
+    def _init_from(self, path: str) -> None:
+        """@brief Start from an existing model's weights.
+
+        A pruned checkpoint no longer matches the width its config implies, so
+        its plan is replayed before the state dict is loaded. Without that the
+        load fails on every feed-forward, which is a confusing way to discover
+        that a file was pruned.
+
+        @param path Checkpoint to load.
+        """
+        from mapposeformer.prune import apply_plan
+
+        ckpt = torch.load(path, map_location="cpu", weights_only=False)
+        upgrade(ckpt.get("config"))
+        plan = ckpt.get("prune_plan")
+        if plan:
+            apply_plan(self.model, plan)
+            self.prune_plan = plan
+            width = min(plan.values())
+            print(f"pruned init: {len(plan)} feed-forwards to {width}")
+        self.model.load_state_dict(ckpt["model"])
+        self.model.to(self.device)
+        print(f"initialised from {path}")
 
     def train(self) -> None:
         cells, pitch = self._grid()
@@ -272,6 +298,7 @@ class Trainer:
         torch.save(
             {
                 "model": model.state_dict(),
+                "prune_plan": getattr(self, "prune_plan", None),
                 "config": self.cfg,
                 "epoch": epoch,
                 "step": self.step,

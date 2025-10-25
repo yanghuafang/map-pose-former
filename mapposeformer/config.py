@@ -49,6 +49,11 @@ class TrainParams:
     compile: bool = False
     """``torch.compile``. Off by default because it costs a minute of warmup
     and hides the first error behind a graph break."""
+    init_from: str = ""
+    """Checkpoint to start from instead of random initialisation. The weights
+    are loaded and the optimizer is not, because this is for fine-tuning a
+    model that has been changed -- pruned, most of the time -- and not for
+    resuming a run that stopped."""
     max_steps: int = 0
     """Stop after this many optimizer steps; 0 means run the full schedule.
     The smoke test uses it."""
