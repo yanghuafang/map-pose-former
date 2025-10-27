@@ -254,9 +254,14 @@ In this order, because each stage changes what the next works with:
    reachable — `nn.MultiheadAttention` ties its projection width to
    `embed_dim`. [OPEN_ITEMS.md](OPEN_ITEMS.md) has what would change that.
 3. **Quantization of the student**: PTQ for the calibration curve, then QAT with
-   `nvidia-modelopt`. The Procrustes head is arithmetic rather than weights, and
-   the cost surface is a closed form over the same statistics — so the part of
-   this model most worth trusting is the part quantization cannot touch.
+   `nvidia-modelopt`. Neither the pose head nor the cost surface has weights to
+   quantize; `mapposeformer/quantize.py` says why that matters.
+
+   `mapposeformer/quantize.py` simulates INT8 to price it in accuracy, which
+   needs no vendor runtime and runs in the test suite. It reaches 49% of the
+   student's weights; the rest is inside `nn.MultiheadAttention` and out of
+   reach, so this shrinks the weights by a third rather than three quarters.
+   The speed question is M5's, because it needs integer kernels.
 
 Report a Pareto table: accuracy against latency, one row per configuration.
 

@@ -109,13 +109,18 @@ protocol but not used in training.
 
 ## Rough edges
 
-- **Attention heads cannot be pruned**, because `SelfBlock`, `CrossBlock` and
-  `AttentionPool` use `nn.MultiheadAttention`, which requires its internal
-  projection width to equal `embed_dim`. Dropping a head makes the two differ
-  and the module cannot express it, so structured pruning reaches the
-  feed-forwards only — 46% of the student's parameters. Replacing it with an
-  explicit `scaled_dot_product_attention` would allow head pruning *and* stop
-  materialising the attention matrix, which is wanted below for its own sake.
+- **`nn.MultiheadAttention` blocks two of M4's three stages.** It holds 49% of
+  the student's parameters and neither pruning nor quantization can reach them.
+  Heads cannot be pruned because the module requires its internal projection
+  width to equal `embed_dim`, and dropping a head makes the two differ. Its
+  weights cannot be quantized because the input projection is a raw parameter
+  rather than a child module, and the output projection is a `Linear` subclass
+  whose `.weight` the parent reads directly, so wrapping it breaks the forward.
+  So structured pruning reaches the feed-forwards only, and INT8 shrinks the
+  weights by a third rather than three quarters. Replacing it with an explicit
+  `scaled_dot_product_attention` would unblock both *and* stop materialising
+  the attention matrix, which is wanted below for its own sake. This is now the
+  single highest-value change in the file.
 - **Pruning scores by weight magnitude**, which ignores what the activations
   do. A Taylor or activation-aware criterion is the obvious next thing to try,
   and the prune/fine-tune/re-measure cycle is what would say whether it pays.
