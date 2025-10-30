@@ -178,10 +178,10 @@ add indirection that teaches nothing.
 ## Throughput
 
 `tools/bench.py` times the generator, the loader and the model apart, because
-one `frames_per_s` cannot say which is the limit. Measured on the A6000 at
-at each config's defaults, the student runs at 211 frames/s
-forward-and-backward in 6.9 GiB, the teacher at 61 in 21.2 GiB, and the data
-pipeline delivers 477–1900. **The model is the constraint now**; the loader was,
+one `frames_per_s` cannot say which is the limit. Measured on the A6000, the
+student runs at 190 frames/s forward-and-backward, the teacher at 59, and the
+data pipeline delivers 247–463. [RESULTS.md](RESULTS.md) has the batch sizes
+and the memory each needs. **The model is the constraint now**; the loader was,
 before the temporal path and the second matching pass.
 
 Neither model is parameter-bound — the student's weights are 9 MB against

@@ -64,10 +64,11 @@ accounts for 12.9 of those points and earns its 2.4×.
 **Converged, it holds.** 0.336 m test translation RMSE against a 1.611 m prior,
 35% better than the 0.521 m of the architecture it replaced, with recall at
 25 cm rising from 86.0% to 96.0%. The observability ablation reproduces and
-sharpens. The dashed-stripe experiment kept its sign and lost its magnitude:
-16% of longitudinal error when first measured, 2% under this milestone's
-corrected clutter rule. The robust solve earns its place on lateral and
-heading. Full tables in [RESULTS.md](RESULTS.md).
+sharpens: lane geometry recovers nothing along track and 83% laterally. The
+robust solve earns its place on lateral and heading. The dashed-stripe
+experiment kept its sign and lost its magnitude — 16% of longitudinal error
+when first measured, 2% once the clutter rule was corrected. Full tables in
+[RESULTS.md](RESULTS.md).
 
 Two results argue with the design. **0.44% of frames are confidently, wildly
 wrong** — the mean ANEES of 4.53 is that tail, not a covariance four times too
@@ -115,9 +116,8 @@ and triplet angles. Untried here.
 **M2a is done and its answer is a qualified yes; M2b has a contract and no
 detector; M2c is unstarted.**
 
-M2a asked whether this backend works on a real map. It does — 1.591 m to
-1.049 m open loop, 0.713 m on trusted frames — and it works far less well than
-on generated scenes, where the same architecture reaches 5.2×. What M2a cannot
+M2a asked whether this backend works on a real map. It does, and far less well
+than on generated scenes — [RESULTS.md](RESULTS.md) has both. What M2a cannot
 do is the observability ablation it was also meant to carry: its detections are
 cut from the map, so they inherit the map's element boundaries, and the one
 class whose ends fall inside the crop is the one that recovers along-track
@@ -237,7 +237,8 @@ In this order, because each stage changes what the next works with:
    assignment carries far more than its pose — a label says which map point is
    correct, the teacher says which of the wrong ones were plausible. The pose
    is not distilled: it is three numbers the ground truth already gives
-   exactly. Written, in `mapposeformer/distill.py`, and not yet run.
+   exactly. **Run: 0.336 m to 0.264 m on test, at the same size and the same
+   latency** — [RESULTS.md](RESULTS.md) has the tables.
 
    The assignment row is completed with the mass it withholds before the
    divergence is taken, so a student that matches everything cannot score the
@@ -246,9 +247,10 @@ In this order, because each stage changes what the next works with:
    cached pass would describe a frame the student never sees.
 2. **Structured pruning of the student**: feed-forward channels, not
    unstructured masks — `torch.nn.utils.prune` zeros weights without removing
-   them, which gives no GPU speedup. Prune, fine-tune, re-measure. Written, in
-   `mapposeformer/prune.py`, and not yet run: half the channels takes the
-   student from 2.28 M parameters to 1.76 M before any fine-tuning.
+   them, which gives no GPU speedup. Prune, fine-tune, re-measure. **Run, and
+   it bought nothing**: 2.28 M parameters to 1.49 M for 0.16 ms, which is
+   noise. The model is activation-bound, so weights were never the cost.
+   [RESULTS.md](RESULTS.md) has the Pareto table.
 
    Attention heads were meant to be the other half of this and are not
    reachable — `nn.MultiheadAttention` ties its projection width to
@@ -261,36 +263,43 @@ In this order, because each stage changes what the next works with:
    needs no vendor runtime and runs in the test suite. It reaches 49% of the
    student's weights; the rest is inside `nn.MultiheadAttention` and out of
    reach, so this shrinks the weights by a third rather than three quarters.
-   The speed question is M5's, because it needs integer kernels.
+   **Run: accuracy is untouched at 8 bits**, 0.261 either way. The speed
+   question is M5's, because it needs integer kernels.
 
 Report a Pareto table: accuracy against latency, one row per configuration.
 
 ### Cost in hours
 
-From the measured throughputs — student 211 frames/s, teacher 61, forward and
-backward on one A6000 — against a nuScenes epoch of ~28 000 keyframes. These are
-compute times; the engineering to build M2 dominates all of them.
+From the measured throughputs — student 190 frames/s, teacher 59, forward and
+backward on one A6000 — against the **37 000 steps M1 needed to converge**, which
+is 2.37 M frames at the student's batch of 64 and 1.48 M at the teacher's 40.
+
+Step-matching is the protocol, not epoch-matching. `synth_teacher.yaml` names
+2000 scenes against the student's 800, so 60 epochs of it is 8.88 M frames and
+41.8 h — an earlier version of this table costed a nuScenes epoch instead and
+came out 8× short. The teacher gets the same optimizer budget the student had;
+whether it needs more is a question its first run answers.
 
 | stage | estimate | basis |
 |---|---|---|
-| teacher training, 40 epochs | **~5.1 h** | 1.12 M frames ÷ 61 |
-| student training, 40 epochs | ~1.5 h | 1.12 M ÷ 211 |
-| distillation, teacher outputs cached | **~1.5 h** | one teacher pass (2 min), then the student's own rate |
-| distillation, teacher run live | ~2.9 h | `1/(1/211 + 1/216)` = 107 frames/s |
-| pruning: fine-tune, three cycles | ~1.1 h | each fine-tune ≈ 25% of a run |
-| quantization: PTQ calibration | ~1 min | 512 batches forward at 793 frames/s |
-| quantization: QAT fine-tune | ~40 min | ≈30% of a run at ~1.4× step cost |
+| teacher training, 37 000 steps | **~7.0 h** | 1.48 M frames ÷ 59 |
+| student training, 37 000 steps | ~3.5 h | 2.37 M ÷ 190 |
+| distillation, teacher outputs cached | **~3.5 h** | one teacher pass (4 min), then the student's own rate |
+| distillation, teacher run live | ~7.0 h | `1/(1/190 + 1/188)` = 95 frames/s |
+| pruning: fine-tune, three cycles | ~2.6 h | each fine-tune ≈ 25% of a run |
+| quantization: PTQ calibration | ~1 min | 512 batches forward at 689 frames/s |
+| quantization: QAT fine-tune | ~1.5 h | ≈30% of a run at ~1.4× step cost |
 | TensorRT: export, three engines, benchmark | **<1 h** | INT8 build with calibration is the long pole |
 
-**About ten hours end to end**, roughly half what it was before the geometric
-bias was defaulted off. Caching the teacher's outputs saves 1.4 h at 48 GB for
-the assignment matrices; it works only on real data, since the synthetic stage
-redraws its noise every epoch.
+**About sixteen hours end to end**, most of it the teacher. Caching the
+teacher's outputs saves 3.5 h at 48 GB for the assignment matrices; it works
+only on real data, since the synthetic stage redraws its noise every epoch.
 
 VRAM is the other constraint worth naming, and it is linear in batch size:
-0.11 GiB per sample for the student, 0.44 for the teacher. At the batch 64 both
-configs now use, that is 7.0 and 28.2 GiB — the teacher would not fit on a 16 GB
-card, and its batch would have to drop to about 35.
+measured, 0.108 GiB per sample for the student and 0.445 for the teacher. At
+their own batch sizes — 64 and 40 — that is 6.9 and 17.8 GiB allocated, 8.0 and
+19.1 GiB reserved. Reserved is what must fit, which is why the teacher's batch
+is 40 and not 48: 48 would reserve about 23 GiB, 96% of a 24 GiB card.
 
 ### Why the teacher is measured too
 

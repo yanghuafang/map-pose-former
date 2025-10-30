@@ -162,7 +162,9 @@ Three ablations worth the space, all one checkpoint under less evidence:
 
 Lane geometry recovers essentially nothing along track (1.367 against a 1.497
 prior) while recovering 83% laterally — the asymmetry this project exists to
-measure.
+measure. The dashes were once worth 16% of the longitudinal signal and are worth
+2%: the claim did not survive a correction to the detector's clutter model, and
+[RESULTS.md](docs/RESULTS.md) keeps both numbers with what changed between.
 
 ### Compressed
 
@@ -177,11 +179,17 @@ Same student, taught by a 25.8 M teacher instead of trained alone:
 21% of the translation error, at identical deployment cost — the teacher is
 discarded after training.
 
+Pruning and quantization then bought nothing. Removing 35% of the parameters
+moved latency 20.95 ms to 21.11 ms, because this model is activation-bound and
+the feed-forward weights were never the cost. That is the result, not a failure
+to report: [RESULTS.md](docs/RESULTS.md) has the Pareto table and what each
+stage cost.
+
 ### On a real map
 
 nuScenes, geographically disjoint split, same architecture: **1.591 m to
 1.049 m** open loop, 0.713 m on trusted frames. A 1.5× reduction where generated
-scenes give 5.2×, and the gap is the finding — a generated world carries every
+scenes give 4.8×, and the gap is the finding — a generated world carries every
 class in comparable numbers, while nuScenes gives 13.8 lane-geometry detections
 a frame against 1.1 crossings and 0.6 traffic signs.
 
@@ -201,6 +209,10 @@ cost and the four bugs found before it.
 | `tools/viz_sample.py` | Draw one frame: map, detections, warped history, both corrections |
 | `tools/viz_volume.py` | Draw the cost surface, in either of the two senses it has |
 | `tools/bench.py` | Where the step time goes — generator, loader and model, apart |
+| `tools/prepare_nuscenes.py` | Turn nuScenes into per-scene worlds, once, offline |
+| `tools/prune.py` | Remove feed-forward channels structurally, and say what it cost |
+| `tools/latency.py` | One forward pass at batch 1, p50 and p99, under a fixed protocol |
+| `tools/pareto.py` | Accuracy against latency, every configuration in one table |
 
 | Script | Purpose |
 |---|---|

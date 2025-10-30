@@ -227,4 +227,7 @@ mapposeformer/
   engine/            The training loop and the evaluator
   losses.py          Five terms; `match` is the one that carries
   metrics.py         Pose error, and whether the covariance is honest
+  distill.py         What a teacher knows that the labels do not
+  prune.py           Remove channels, do not mask them
+  quantize.py        Simulated INT8, to price it in accuracy
 ```

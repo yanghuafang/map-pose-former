@@ -259,6 +259,58 @@ models that both withhold most of their assignment mass agree about doing so.
 Rebalancing the weights on either measurement would have been wrong; the ratio
 is a function of how converged the teacher is, not of the weights.
 
+## M4 — the compression Pareto
+
+`scripts/m4.sh`, one `tools/pareto.py` process so every row is the same split,
+the same protocol, the same machine. Batch 1, 200 warmup iterations, p50 and p99
+over 1000. Test split, 8 880 frames.
+
+| | params | trans | trusted | recall @25cm | p50 | p99 |
+|---|---|---|---|---|---|---|
+| teacher | 25.83 M | 0.218 | 0.185 | 96.7% | 35.26 ms | 35.65 ms |
+| student, alone | 2.28 M | 0.336 | 0.297 | 96.0% | **20.32 ms** | 20.64 ms |
+| student, distilled | 2.28 M | 0.264 | 0.224 | 95.5% | 20.95 ms | 21.26 ms |
+| pruned to 75% | 2.02 M | **0.254** | 0.248 | 95.7% | 21.01 ms | 25.99 ms |
+| pruned to 50% | 1.76 M | 0.267 | 0.248 | 95.7% | 20.42 ms | 20.73 ms |
+| pruned to 25% | 1.49 M | 0.261 | 0.240 | 95.7% | 21.11 ms | 21.44 ms |
+| pruned to 25%, INT8 | 1.49 M | 0.261 | 0.242 | 95.6% | 34.40 ms | 34.81 ms |
+
+### Removing 35% of the parameters bought nothing
+
+That is the result. From 2.28 M to 1.49 M, latency goes 20.95 ms to 21.11 ms —
+within noise, and in the wrong direction. The accuracy is free too: 0.264 to
+0.261. Both facts have one cause, and the project predicted it before any of
+this ran: **the model is activation-bound, not parameter-bound.** Attention runs
+over ~1400 tokens and a 768 × 576 assignment matrix; the feed-forward weights
+that pruning removes were never the bottleneck.
+
+| | what it changed | what it cost |
+|---|---|---|
+| distillation | 0.336 → 0.264, −21% | 8 h to train a teacher, discarded after |
+| pruning to 25% | 0.264 → 0.261, −1% | 35% of parameters, 0% of latency |
+| INT8 (simulated) | 0.261 → 0.261, 0% | +63% latency, which is the simulation |
+
+The teacher is the same shape: 11× the parameters of the student for 1.7× the
+latency. If parameters drove cost, it would be 11×.
+
+### What that means for the milestone
+
+**Pruning is the wrong lever for this architecture.** It is not that pruning failed — it removed a third of the weights for no
+accuracy — it is that weights were not what made this model slow. The lever that
+would move latency is the one `docs/OPEN_ITEMS.md` now ranks first: replacing
+`nn.MultiheadAttention` with `scaled_dot_product_attention`, which would stop
+materialising the attention matrix.
+
+**The INT8 row is a simulation and its latency must not be read as INT8's.**
+Quantize-dequantize adds rounding and removes no arithmetic, so 34.40 ms is the
+cost of *pretending*. What the row does say is that accuracy is untouched at 8
+bits — 0.261 either way — which is the number worth carrying into M5. It also
+reaches only 49% of the weights, because the rest are inside
+`nn.MultiheadAttention`; the same module, a third time.
+
+**Distillation is the only stage that paid.** It is also the only one that
+changes what the model *knows* rather than how it is stored.
+
 ## M1 — the observability ablation
 
 One checkpoint, evaluated under less evidence. Only what the model may see
