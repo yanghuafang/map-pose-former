@@ -186,3 +186,117 @@ has its points spread over all four and dragged toward their common centroid.
 `point_assign=point` buys some of that back with a learned per-point query, and
 the keys it queries are still pooled.
 
+## Stage 3 — solve, don't regress
+
+`solve.py`. Given weights saying how much each detected point belongs to each
+map point, the pose is the minimiser of
+
+    E(R, t) = Σ aᵢⱼ ‖R dᵢ + t − mⱼ‖²
+
+Setting ∂E/∂t = 0 gives `t = m̄ − R d̄`, so translation is whatever carries one
+weighted centroid onto the other and only the rotation is left. Substituting it
+back leaves a single sinusoid in θ, maximised at
+
+    θ = atan2(H₀₁ − H₁₀, H₀₀ + H₁₁),   H = Σ aᵢⱼ (dᵢ − d̄)(mⱼ − m̄)ᵀ
+
+No SVD, no reflection to repair — the 3-D Procrustes solve needs both and
+SE(2) needs neither. `H` is one matmul contracted to 2×2, so the assignment is
+never expanded into per-pair residuals.
+
+**That closed form is exact only while every residual is isotropic**, which is
+the shipped point-to-point case. It is still not what runs: robust reweighting
+needs passes, and the rank-1 residual a lane line gets — `n nᵀ`, which pins
+only the perpendicular offset — has no closed form at all. So the model runs
+`solve_pose_directional`, damped Gauss-Newton over three passes
+(`ModelParams.refine_iters`), the first of which *is* the least squares. What
+survives is the claim that matters: **no parameters are fitted at either
+stage**, and a wrong pose means a wrong assignment.
+
+Solving rather than regressing buys three things worth more than the
+flexibility it gives up: it cannot overfit, it quantizes exactly because there
+are no weights to quantize, and when the pose is wrong the *assignment* was
+wrong — which is a thing you can look at.
+
+**Robustness, and why it has to be annealed.** A least-squares solve has no
+defence against a confident wrong match, so iteratively reweighted least
+squares applies Geman-McClure's redescending weight: 30 exact correspondences
+and one gross outlier drag the plain solve 1.008 m off, and three reweighting
+passes bring it back to 2.6e-6 m.
+
+But the property that makes it reject an outlier makes it reject nearly
+everything while the pose is still bad. On an untrained model a 1 m σ keeps
+0.006 of the assignment mass where 12 m keeps 0.35. So the trainer anneals σ
+wide-to-narrow — graduated non-convexity, solving a nearly-convex problem first
+and deforming it into the hard one.
+
+## Where the covariance comes from
+
+`solve.py`, and it has nothing fitted. Near the minimum the cost is
+`c_min + dᵀHd/2`, so the pose is uncertain by how far `d` moves before the cost
+rises by the noise in the cost itself — giving `2 s² H⁻¹` with
+`s² = cost / (dof − 3)`, the weighted mean squared residual with the three
+fitted pose parameters taken out of the count.
+
+**Point-to-point is the case where every projection is the identity**, and the
+translation Hessian is then `2·mass·I` — isotropic, reporting `σ_long/σ_lat` =
+1.01 on lane lines alone and 1.01 again with eight poles added. The shape it
+reports is fixed by the weights, not by the landmarks.
+
+The repair that suggests itself is to give each map point a 2×2 projection
+saying which directions it constrains — `n nᵀ` for a point on a polyline, which
+pins only the perpendicular offset, and the identity for a pole. That is
+`residual=line`: each correspondence becomes rank-1, and a road of parallel
+lane lines then produces a Hessian genuinely ill-conditioned along the road.
+**It loses anyway.** At four layers the rank-1 residual reports a covariance
+7.7 to 17.7× too wide with its major axis 65 to 79° out, on all three seeds,
+where point-to-point holds 1.07–1.14× and 11–14°; NEES 0.68–0.76 against an
+honest 0.789, rank-1 0.04–0.20, no overlap. A covariance argument that is
+correct on a fixed assignment can still lose to one that survives a learned
+assignment.
+
+The prior is fused in because it is information the system genuinely has, and
+because it is what makes each Gauss-Newton step solvable: under the rank-1
+residual three lane lines and nothing else leave the measurement **singular**,
+not merely weak, with the null direction along the road. That is the honest
+answer rather than a number to be regularised away.
+
+### Two matrices, because there are two readers
+
+Fusing the prior is right for one question and wrong for the other, so the
+model reports both.
+
+| | what it is | who wants it |
+|---|---|---|
+| `cov` | `(H/2s² + prior)⁻¹`, the posterior | NEES against the truth |
+| `information` | `H/2s²`, this frame alone | the Kalman filter |
+
+A NEES asks how far the estimate landed from the truth in units of its own
+claimed uncertainty, and the estimate *used* the prior — so the prior belongs
+in it. A filter's own state already **is** that prior, so `S = P + R` with the
+fused matrix adds a copy of the filter's belief to something that already
+contains one. Measured: a measurement worth 1 m against a prior worth 1 m
+should give `S = 2`, and the fused form gives 1.5.
+
+Handing over information rather than a covariance also deletes the singular
+case instead of special-casing it. Where the measurement is singular there is
+no covariance to hand over at all, because the road direction is genuinely
+unobservable — but the information matrix is perfectly well defined and simply
+has a zero eigenvalue pointing down the road, contributing nothing in that
+direction. `filter.py` adds it to its own information and never inverts it.
+
+### A floor is not an epsilon
+
+`s²` carries a floor of (0.12 m)² = 0.0144 m² — the detector's own per-point
+noise, squared, because `s²` is a variance — and the
+tempting thing is to write `1e-8` there and call it numerical hygiene. That
+was the bug. A near-singular `H` divided by `1e-8` gives an information matrix
+around `3e10`, and the prior contributing `3e3` is then seven orders below it —
+so adding them in float32 **rounds 813 units of the prior away**, and the term
+that made the problem well posed stops being there. On the checkpoint where
+this fired, 38% of frames came back with a negative eigenvalue.
+
+The lesson generalises past this project: when a regulariser is added to a
+term that a small divisor has inflated, the divisor decides whether the
+regulariser survives the addition at all. Widening to float64 does *not* fix
+it — measured, that still returned a negative eigenvalue. The floor does.
+
