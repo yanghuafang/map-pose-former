@@ -36,6 +36,12 @@ def exact_arithmetic(device_type: str):
     CPU cannot catch this by accident, because autocast is off there;
     ``tests/test_model.py`` asks for bf16 explicitly.
 
+    **The caller owns the boundary.** This block returns fp32, and a network
+    that is not fp32 has to cast back before the result reaches a layer. Under
+    autocast that happens for free, one op at a time. Under ``.half()`` it does
+    not, and the fp32 island propagates instead -- which is what stood between
+    this model and an FP16 engine.
+
     @param device_type Autocast device string, e.g. ``"cuda"``.
     """
     with torch.autocast(device_type=device_type, enabled=False):

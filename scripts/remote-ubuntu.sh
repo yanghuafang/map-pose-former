@@ -99,8 +99,9 @@ fi
 if [[ "$do_sync" == true ]]; then
   echo "Syncing ${repo_root}/ -> ${REMOTE_HOST}:${REMOTE_DIR}/"
   # .git stays on the laptop, which is the source of truth for history. runs/
-  # is excluded in both directions: --delete would otherwise wipe the
-  # checkpoints of whatever is training on the host right now.
+  # and build/ are excluded in both directions: --delete would otherwise wipe
+  # the checkpoints of whatever is training on the host right now, and the
+  # TensorRT engines, which take minutes to compile and exist only there.
   ssh "${REMOTE_HOST}" "mkdir -p ${REMOTE_DIR} ${REMOTE_DATA}"
   rsync -az --delete \
     --exclude '.git/' \
@@ -109,6 +110,7 @@ if [[ "$do_sync" == true ]]; then
     --exclude '__pycache__/' \
     --exclude '.pytest_cache/' \
     --exclude 'runs/' \
+    --exclude 'build/' \
     --exclude '.DS_Store' \
     "${repo_root}/" "${REMOTE_HOST}:${REMOTE_DIR}/"
 fi

@@ -162,7 +162,9 @@ Single GPU, no DDP: the model is 2.3 M parameters and distributed training would
 add indirection that teaches nothing.
 
 - **bf16, not fp16.** Same exponent range as fp32, so no loss scaler, and the
-  Procrustes `atan2` cannot underflow.
+  Procrustes `atan2` cannot underflow. Deployment goes the other way — no
+  gradients there, so precision matters more than range — and
+  [ARCHITECTURE.md](ARCHITECTURE.md) maps which stage runs in which.
 - **TF32 is fine.** The geometry runs in fp32 inside `geometry.exact_arithmetic`,
   which guards the three places that multiply a weight by a *coordinate* and
   records what bf16 costs there. A CPU test suite cannot notice, since autocast

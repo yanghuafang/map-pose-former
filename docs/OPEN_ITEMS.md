@@ -46,9 +46,10 @@ infer any of it from an absence.
   running a pretrained mapper, not by training one.
 - **No closed-loop evaluation.** The prior is drawn from a distribution rather
   than produced by the previous frame's output. M3.
-- **No compression and no deployment.** M4 and M5 — the stated purpose of the
-  project, so their absence is the largest gap in it. The static input shapes
-  and the parameter-free head anticipate them; neither has been exported.
+- **Deployment stops at the ONNX.** Compression and the runtime are measured
+  (M4), but nothing here runs inside the system it was written for: the C++
+  TensorRT backend that would plug into camera-map-localization, so that one
+  filter and one metric score both, is unwritten.
 - **No map topology.** The synthetic world has none worth the name. nuScenes
   is the first map here with one; it becomes an input at M2c.
 - **No prior covariance as an input.** Open loop it adds nothing, since the
@@ -108,6 +109,16 @@ protocol but not used in training.
   run rather than holding at one.
 
 ## Rough edges
+
+- **The FP16 engine is unmeasured.** The export works — `exact_arithmetic`'s
+  fp32 island needed casts at its edges, not the builder — but no FP16 engine
+  has been built or timed, so the row is still empty. Accuracy at fp16 is
+  measured and free; only the latency is missing.
+- **INT8 through TensorRT is unbuilt.** TensorRT 11 removed
+  `BuilderFlag.INT8` and the calibrator classes; precision now comes from
+  quantize/dequantize nodes in the graph, which `nvidia-modelopt` inserts. The
+  simulated INT8 in `quantize.py` prices the accuracy — unchanged at 8 bits —
+  and says nothing about the speed.
 
 - **`nn.MultiheadAttention` blocks two of M4's three stages.** It holds 49% of
   the student's parameters and neither pruning nor quantization can reach them.

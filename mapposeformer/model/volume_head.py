@@ -101,6 +101,18 @@ def grid_cost(
     return cost, mass
 
 
+def _dtype_of(module: nn.Module) -> torch.dtype:
+    """@brief The dtype a module's weights are in.
+
+    The guarded arithmetic below runs in fp32 whatever the network is in, so
+    its results have to come back to the network's dtype before they reach a
+    layer. Read from the parameters rather than a ``.weight`` attribute,
+    because ``quantize.FakeQuantLinear`` wraps a layer rather than subclassing
+    it and has no ``weight`` of its own.
+    """
+    return next(module.parameters()).dtype
+
+
 class VolumeHead(nn.Module):
     """The measured cost surface, its covariance, and a trust score."""
 
@@ -198,8 +210,8 @@ class VolumeHead(nn.Module):
                 assign.float(),
                 det.float(),
                 mp.float(),
-                self.cell_t,
-                self.cell_rot,
+                self.cell_t.float(),
+                self.cell_rot.float(),
             )
             # Per correspondence, so the scale is a mean squared residual in
             # metres and does not move with how much the matcher matched. The
@@ -207,12 +219,16 @@ class VolumeHead(nn.Module):
             # away from the large common offset every cell shares.
             cost = cost / mass.clamp_min(_EPS).unsqueeze(-1)
             cost = cost - cost.min(dim=-1, keepdim=True).values
-            sharp = F.softplus(self.log_sharpness + self.sharpness(g.float()))
+            sharp = F.softplus(
+                self.log_sharpness
+                + self.sharpness(g.float().to(_dtype_of(self.sharpness)))
+            )
             logits = -cost * sharp
 
             prob = F.softmax(logits, dim=-1)
-            mean = prob @ self.cells
-            residual = self.cells.unsqueeze(0) - mean.unsqueeze(1)
+            cells = self.cells.float()
+            mean = prob @ cells
+            residual = cells.unsqueeze(0) - mean.unsqueeze(1)
             cov = torch.einsum("bg,bgi,bgj->bij", prob, residual, residual)
             # Clamped before the exponential. Training pushes this weight
             # positive by design, and fp32 ``exp`` overflows at 88 -- so
@@ -220,13 +236,15 @@ class VolumeHead(nn.Module):
             # by accident, and every weight in the model is NaN one step
             # later. Eight is three orders of magnitude of correction
             # either way, far more than a calibration factor needs.
-            scale = self.log_scale(g.float()).clamp(-8.0, 8.0)
+            scale = self.log_scale(
+                g.float().to(_dtype_of(self.log_scale))
+            ).clamp(-8.0, 8.0)
             cov = cov * torch.exp(scale).view(-1, 1, 1)
             # A floor on the diagonal, for the same reason the classical
             # filter gates on a flat cost surface: a peak one cell wide would
             # otherwise report near-zero variance and let a single frame
             # dominate the filter.
-            cov = cov + torch.diag_embed(self.min_var.expand_as(mean))
+            cov = cov + torch.diag_embed(self.min_var.float().expand_as(mean))
         return {
             "logits": logits,
             "delta": mean,

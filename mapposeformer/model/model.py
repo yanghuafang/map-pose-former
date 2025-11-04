@@ -297,9 +297,9 @@ class MapPoseFormer(nn.Module):
             # matching gets easier; letting the gradient run back through a
             # chain of warps would make each pass responsible for the ones
             # after it, which is a much longer path for no extra signal.
-            moved = G.transform_points(delta.detach(), det_xy).view_as(
-                det["pts"]
-            )
+            moved = G.transform_points(
+                delta.detach().to(det_xy.dtype), det_xy
+            ).view_as(det["pts"])
             assign, scores, tokens, pad = self._trunk(det, batch, moved)
             # Solved on the *original* coordinates, so this is the total
             # correction and not an increment -- no composition, and the next

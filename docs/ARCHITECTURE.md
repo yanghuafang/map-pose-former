@@ -217,6 +217,24 @@ fuse an arbitrarily long history for free.
   constant and varies by a few percent of it. The cost is divided by mass,
   making it a mean squared residual, and shifted by its own minimum.
 
+- **Which precision runs where.** Autocast changes activations, not weights, so
+  the parameters are fp32 in every row below and only the arithmetic moves.
+
+  | stage | precision |
+  |---|---|
+  | training | bf16 autocast, fp32 master weights |
+  | the three coordinate sites | fp32, by `geometry.exact_arithmetic` |
+  | checkpoints on disk | fp32 |
+  | evaluation, and the ONNX a release carries | fp32 |
+  | `tools/export.py --half`, and the engine built from it | fp16 |
+  | simulated INT8 | fp32 arithmetic over values snapped to an 8-bit grid |
+  | pruned checkpoints | fp32; pruning removes channels, not precision |
+
+  `amp: fp16` is supported by the trainer and used by no config: it needs a
+  `GradScaler`, and [TRAINING.md](TRAINING.md) lists it among the causes of a
+  NaN loss. That the engine is fp16 rather than bf16 is measured rather than
+  assumed -- [RESULTS.md](RESULTS.md) has the table.
+
 ## Module map
 
 ```

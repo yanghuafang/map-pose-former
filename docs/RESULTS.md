@@ -311,6 +311,59 @@ reaches only 49% of the weights, because the rest are inside
 **Distillation is the only stage that paid.** It is also the only one that
 changes what the model *knows* rather than how it is stored.
 
+## M5 — TensorRT, and what M4 was really measuring
+
+The distilled student, exported to ONNX and compiled to a strongly typed
+engine. Same protocol as M4: batch 1, 200 warmup iterations, p50 and p99 over
+1000, same machine.
+
+| | runtime | params | engine | p50 | p99 | vs PyTorch |
+|---|---|---|---|---|---|---|
+| distilled | PyTorch eager | 2.28 M | — | 20.95 ms | 21.26 ms | 1.0× |
+| distilled | TensorRT fp32 | 2.28 M | 12.1 MB | **5.28 ms** | 5.41 ms | **4.0×** |
+| pruned to 25% | PyTorch eager | 1.49 M | — | 21.11 ms | 21.44 ms | 1.0× |
+| pruned to 25% | TensorRT fp32 | 1.49 M | 8.9 MB | **4.93 ms** | 5.07 ms | **4.3×** |
+
+**Four times faster at identical precision and identical weights.** Nothing
+about the model changed — same checkpoint, same fp32 arithmetic, same answer.
+What changed is that 3 560 layers became a fused engine instead of 3 560 Python
+dispatches.
+
+### This overturns M4's conclusion
+
+M4 concluded that pruning bought nothing because the model is activation-bound.
+That was true of what it measured and false as a statement about the model.
+Under PyTorch, removing 35% of the parameters moved latency 20.95 ms to 21.11 ms
+— nothing. Under TensorRT the same two checkpoints are 5.28 ms and 4.93 ms:
+**6.6%, and a 26% smaller engine.**
+
+So the dominant cost was never the weights *or* the activations. It was
+framework overhead, and it was large enough to hide the pruning entirely. A
+compression measurement taken in eager PyTorch had been measuring the
+interpreter.
+
+| what M4 said | what M5 shows |
+|---|---|
+| pruning buys 0% latency | pruning buys 6.6%, once overhead is removed |
+| the model is activation-bound | the *measurement* was dispatch-bound |
+| INT8 costs 63% more latency | that was the simulation, not INT8 |
+
+The general lesson is the one this project keeps relearning: **an instrument
+that dominates the effect will report that the effect is absent.** It was the
+`hash()` seed at M2a, and it is the Python dispatch loop here.
+
+### FP16 does not export, and INT8 is not reachable yet
+
+`--half` fails inside `torch.export`: *"Expected query, key, and value to have
+the same dtype, but got query.dtype: Half key.dtype: float"*. Something in the
+graph stays fp32 through `.half()`, and until it is found the FP16 row cannot be
+measured. Recorded, because it is exactly the kind of
+export surprise M1 pulled the smoke test forward to avoid.
+
+INT8 needs the graph to carry quantize/dequantize nodes, which is
+`nvidia-modelopt`'s job — TensorRT 11 removed the calibrator API this project's
+roadmap had planned around. [OPEN_ITEMS.md](OPEN_ITEMS.md) has both.
+
 ## M1 — the observability ablation
 
 One checkpoint, evaluated under less evidence. Only what the model may see
@@ -433,6 +486,37 @@ geometry gives better rotation and worse translation, and a bounded regressor
 degrades far more gracefully when the evidence is wrong. The honest reading is
 that neither is dominant, and the parameter-free head is justified by rotation
 accuracy, interpretability and quantization behaviour rather than by RMSE.
+
+### fp16, and why not bf16
+
+A strongly typed engine takes its precision from the graph, so the choice is
+made at export rather than at build. Both reduced formats are sixteen bits and
+they spend them differently: fp16 keeps ten mantissa bits, bf16 keeps seven and
+buys fp32's exponent range with the difference. Cast whole -- weights and
+inputs -- on the test split:
+
+| | trans | long | lat | yaw | NEES/dof median |
+|---|---|---|---|---|---|
+| **student**, fp32 | 0.336 | 0.322 | 0.095 | **0.209°** | **0.786** |
+| fp16 | 0.336 | 0.322 | 0.095 | 0.211° | 0.815 |
+| bf16 | 0.332 | 0.318 | 0.095 | 0.335° | 1.479 |
+| **distilled**, fp32 | 0.264 | 0.246 | 0.097 | **0.215°** | **0.811** |
+| fp16 | 0.263 | 0.244 | 0.097 | 0.217° | 0.838 |
+| bf16 | 0.266 | 0.247 | 0.097 | 0.338° | 1.501 |
+
+**Translation does not notice and heading does.** bf16 resolves a 40 m map
+coordinate to 12.5 cm where fp16 resolves 1.56 cm, and 12.5 cm across a 40 m
+baseline subtends 0.18° -- the size of the heading error being measured.
+Position averages that away over the points in a frame; an angle cannot.
+
+**What it really costs is the covariance.** The median NEES/dof goes from 0.79
+to 1.48, so the uncertainty the model reports is about half the error it should
+describe. Anything downstream that weights by that covariance is being lied to,
+and the calibration is the part of this model most worth trusting.
+
+So the export is fp16, and `--half` means fp16 rather than merely sixteen bits.
+bf16 would also need Ampere or newer, where fp16 runs on older cards too.
+
 
 ## Identities, each with a test
 

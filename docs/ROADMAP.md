@@ -9,16 +9,28 @@ the second half is the stated purpose of the project:
 
 ```
 M1 measurement ──┬── M2 nuScenes ── M3 closed loop
-                 └── M4 compression ── M5 deployment
+                 └── M4 make it fast (runtime first, then compression)
 ```
 
-**M4 and M5 do not depend on real data.** Distillation, pruning, quantization
-and the TensorRT export can all be exercised end to end on the synthetic stage
-as soon as M1 has a converged checkpoint — about ten hours of GPU. Doing that
-first de-risks the export while the model is still cheap to retrain, and turns
-"repeat it on nuScenes" into re-running a pipeline that already works. Running
-them last, behind two milestones that could each take weeks, risks a project
-that never reaches the thing it was for.
+**M4 does not depend on real data.** Distillation, pruning, quantization and the
+TensorRT export can all be exercised on the synthetic stage as soon as M1 has a
+converged checkpoint. Doing that first de-risks the export while the model is
+still cheap to retrain, and turns "repeat it on nuScenes" into re-running a
+pipeline that already works. Running it last, behind two milestones that could
+each take weeks, risks a project that never reaches the thing it was for.
+
+**Compression and deployment were two milestones and are now one, because
+separating them produced a wrong answer.** The original plan measured
+compression in PyTorch (M4) and built the TensorRT runtime afterwards (M5). Run
+that way, pruning bought 0% of latency and the conclusion was "the model is
+activation-bound". Then the runtime landed and the same two checkpoints were 4×
+faster, with pruning worth 6.6% — the earlier measurement had been dominated by
+framework dispatch and was measuring the interpreter.
+
+The lesson generalises past this project: **build the runtime you will deploy on
+before you measure what to compress.** A compression number is a statement about
+a runtime, and taking it on a different one measures that other runtime instead.
+The milestones are merged so the ordering cannot be got wrong again.
 
 **Compression here is pedagogical, and that should be said plainly.** No latency
 budget forces it: at batch 1 the student is already far inside anything a
@@ -215,11 +227,41 @@ differently in the two cases. It also closes an inconsistency: the surface's
 extent is pinned to a fixed truncation bound, so a wider prior has no correct
 cell.
 
-## M4 — Compression
+## M4 — Make it fast
 
-**Nothing in this milestone is implemented.** The student is trained — it is
-M1's converged baseline — but the teacher has never been run beyond
-`tools/bench.py`, and there is no distillation, pruning or quantization code.
+Two phases, and **the runtime comes first**. Compression is measured in a
+runtime, so the runtime has to exist before any of it means anything — see
+"What actually blocks what" for the measurement this ordering was learned from.
+
+### M4a — the runtime
+
+**Started: fp32 engines build and run 4× faster than PyTorch.** 20.95 ms to
+5.28 ms on the distilled student, at identical precision and identical weights.
+This phase was M5 and ran second; that ordering is why the compression numbers
+below had to be taken twice. [RESULTS.md](RESULTS.md) has both.
+
+ONNX export via `torch.export` — the input shapes are already static for this,
+and the dynamo path produces a far cleaner graph than the legacy tracer for a
+model this full of masks and einsums.
+
+**TensorRT 11 does not take precision as a build flag.** `BuilderFlag.FP16`,
+`BuilderFlag.INT8` and `IInt8EntropyCalibrator2` are gone; a strongly typed
+network takes each layer's type from the graph. So FP16 means exporting a half
+model, and INT8 means exporting one carrying quantize/dequantize nodes, which is
+`nvidia-modelopt`'s job. 2:4 sparsity is still a builder flag
+(`SPARSE_WEIGHTS`) and is untried.
+
+The finale: a small C++ TensorRT backend plugging into
+camera-map-localization's engine as an alternative to `PoseSampler`, so the same
+`run_sequence` and `eval_sequence` evaluate both backends under one metric and
+one filter.
+
+### M4b — distillation, pruning, quantization
+
+**All three are implemented and run.** Distillation pays, pruning pays a little
+once measured on the runtime, and quantization is unmeasurable for speed until
+the graph carries Q/DQ nodes. The teacher is trained and kept only to distil
+from; the student is the deployment artifact.
 
 | | student | teacher |
 |---|---|---|
@@ -318,14 +360,3 @@ The protocol is fixed in advance, because a latency number without one is
 unfalsifiable: batch 1, CUDA graphs, 200 warmup iterations then p50 and p99 over
 1000, the same for every row including the fp32 baseline.
 
-## M5 — Deployment
-
-ONNX export via `torch.export` — the input shapes are already static for this,
-and the dynamo path produces a far cleaner graph than the legacy tracer for a
-model this full of masks and einsums. Then TensorRT: FP16, INT8, and 2:4
-structured sparsity, all three supported on Ampere.
-
-The finale: a small C++ TensorRT backend plugging into
-camera-map-localization's engine as an alternative to `PoseSampler`, so the same
-`run_sequence` and `eval_sequence` evaluate both backends under one metric and
-one filter.

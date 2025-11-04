@@ -179,11 +179,11 @@ Same student, taught by a 25.8 M teacher instead of trained alone:
 21% of the translation error, at identical deployment cost — the teacher is
 discarded after training.
 
-Pruning and quantization then bought nothing. Removing 35% of the parameters
-moved latency 20.95 ms to 21.11 ms, because this model is activation-bound and
-the feed-forward weights were never the cost. That is the result, not a failure
-to report: [RESULTS.md](docs/RESULTS.md) has the Pareto table and what each
-stage cost.
+Pruning then bought nothing — until the model left PyTorch. Compiled to a
+TensorRT engine it runs **4× faster at identical precision**, 20.95 ms to
+5.28 ms, and the pruning that had been worth 0% is worth 6.6%. The compression
+measurement had been dominated by framework overhead.
+[RESULTS.md](docs/RESULTS.md) has both tables and what each stage cost.
 
 ### On a real map
 
@@ -213,6 +213,8 @@ cost and the four bugs found before it.
 | `tools/prune.py` | Remove feed-forward channels structurally, and say what it cost |
 | `tools/latency.py` | One forward pass at batch 1, p50 and p99, under a fixed protocol |
 | `tools/pareto.py` | Accuracy against latency, every configuration in one table |
+| `tools/export.py` | Checkpoint to ONNX, and on to a TensorRT engine |
+| `tools/trt_latency.py` | Time an engine, under the protocol the Pareto table uses |
 
 | Script | Purpose |
 |---|---|
