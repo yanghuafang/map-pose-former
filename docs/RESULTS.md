@@ -275,6 +275,21 @@ over 1000. Test split, 8 880 frames.
 | pruned to 25% | 1.49 M | 0.261 | 0.240 | 95.7% | 21.11 ms | 21.44 ms |
 | pruned to 25%, INT8 | 1.49 M | 0.261 | 0.242 | 95.6% | 34.40 ms | 34.81 ms |
 
+![accuracy against latency](img/pareto.svg)
+
+The vertical line at ~21 ms is the finding: four configurations, 2.28 M
+parameters down to 1.49 M, and the latency does not move. The two triangles are
+the same weights and the same arithmetic on a different runtime.
+
+```bash
+tools/pareto.py teacher=runs/teacher/best.pt student=runs/m1_base/best.pt \
+    distilled=runs/distilled/best.pt pruned@0.75=runs/p75/best.pt \
+    pruned@0.5=runs/p5/best.pt pruned@0.25=runs/p25/best.pt \
+    --split test --json runs/pareto.json
+tools/plot_pareto.py runs/pareto.json \
+    --trt distilled=5.267 --trt pruned@0.25=4.896 --out docs/img/pareto.svg
+```
+
 ### Removing 35% of the parameters bought nothing
 
 That is the result. From 2.28 M to 1.49 M, latency goes 20.95 ms to 21.11 ms —

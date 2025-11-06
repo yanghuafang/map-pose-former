@@ -18,6 +18,7 @@ happened to match.
 from __future__ import annotations
 
 import argparse
+import json
 import statistics
 import sys
 import time
@@ -96,6 +97,11 @@ def main() -> int:
     ap.add_argument(
         "--device", default="cuda" if torch.cuda.is_available() else "cpu"
     )
+    ap.add_argument(
+        "--json",
+        help="also write the rows here, for tools/plot_pareto.py. A plot that "
+        "re-parsed the table below would break the moment it was reformatted.",
+    )
     args = ap.parse_args()
 
     table = []
@@ -137,6 +143,32 @@ def main() -> int:
             f"| {label} | {p:.2f} M | {tr:.3f} | {tru:.3f} | "
             f"{rec:.1%} | {p50:.2f} ms | {p99:.2f} ms |"
         )
+
+    if args.json:
+        keys = (
+            "label",
+            "params_m",
+            "trans_m",
+            "trusted_m",
+            "recall",
+            "p50_ms",
+            "p99_ms",
+        )
+        out = Path(args.json)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(
+            json.dumps(
+                {
+                    "split": args.split,
+                    "iters": args.iters,
+                    "runtime": "pytorch",
+                    "rows": [dict(zip(keys, r, strict=True)) for r in table],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        print(f"\nwrote {out}", file=sys.stderr)
     return 0
 
 
