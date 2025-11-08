@@ -3,10 +3,10 @@
 **Where is the car, given what the camera sees and what the map says?** — again,
 but learned this time.
 
-A readable PyTorch implementation of transformer map-matching localization:
-match detected landmarks against an HD map, solve the rigid transform in closed
-form, report a pose correction with a measured covariance. Then prune it, distil
-it, quantize it, and put it on TensorRT.
+Transformer map-matching localization in PyTorch: match detected landmarks
+against an HD map, solve the rigid transform in closed form, report a pose
+correction with a measured covariance. Then distil it, prune it, quantize it and
+put it on TensorRT.
 
 The learned counterpart to
 [camera-map-localization](https://github.com/yanghuafang/camera-map-localization),
@@ -18,17 +18,55 @@ Written to be **read**. Every non-obvious decision carries its reason, and where
 the code falls short of its own documentation it says so —
 [OPEN_ITEMS.md](docs/OPEN_ITEMS.md).
 
-## Three commands
+## What it achieves
 
-```bash
-./scripts/setup.sh        # conda env + CPU torch
-./scripts/ci.sh           # format, lint, tests
-./scripts/run_smoke.sh    # train, evaluate, and draw a frame
-```
+Test split, 8 880 generated frames, seeds disjoint from training. One RTX A6000.
 
-No dataset, no GPU: the scenes are generated locally. CUDA training and the
-TensorRT export need Linux; everything else runs on macOS too, which is why
-`scripts/remote-ubuntu.sh` exists — edit on a laptop, run on the box.
+| | trans | long | lat | yaw | recall @ 0.25 m, 0.5° |
+|---|---|---|---|---|---|
+| do nothing (the prior) | 1.611 | 1.497 | 0.596 | 0.993° | 1.3% |
+| **this model** | **0.336** | 0.322 | 0.095 | 0.209° | **96.0%** |
+| *the architecture it replaced* | *0.521* | *0.498* | *0.154* | *0.590°* | *86.0%* |
+
+A 4.8× reduction on translation, 35% better than the model it replaced. On
+nuScenes, on a geographically disjoint split, 1.591 m to 1.049 m.
+
+Then made small and fast, which is what the project is for:
+
+| | params | trans | p50 latency |
+|---|---|---|---|
+| teacher | 25.83 M | 0.218 | 35.26 ms |
+| student, trained alone | 2.28 M | 0.336 | 20.32 ms |
+| student, distilled | 2.28 M | **0.264** | 20.95 ms |
+| distilled, pruned 35% | 1.49 M | 0.261 | 21.11 ms |
+| **the same, on TensorRT** | 1.49 M | **0.261** | **4.93 ms** |
+
+![accuracy against latency](docs/img/pareto.svg)
+
+**Distillation is worth 21% of the error at no deployment cost** — the teacher
+is discarded after training. **Pruning bought nothing until the model left
+PyTorch**, and then 6.6%: the compression measurement had been dominated by
+framework dispatch, and a third of the parameters removed could not move a
+number the interpreter was setting. Compiling to TensorRT is worth 4×, at
+identical weights and identical precision.
+
+## The picture that explains the problem
+
+Same frame, same oracle matching, different evidence:
+
+| every landmark class | lane geometry only |
+|---|---|
+| ![peak](docs/img/volume_all.svg) | ![ridge](docs/img/volume_lanes.svg) |
+| a peak: position is determined | a **ridge** along the road: sliding forward costs almost nothing |
+
+Lane lines run parallel to travel, so a hypothesis that has slid a metre down
+the road still lies on the same lines. Crossings, poles and signs pin
+along-track position; removing them flattens the surface 31% along track while
+lateral and heading barely move.
+
+**The model does not report that surface** — it reports the cheaper one, which
+is a paraboloid with no ridge. Finding that out is what the tool was built for.
+`--mode fit` draws it; [RESULTS.md](docs/RESULTS.md) has the measurement.
 
 ## What it does, per frame
 
@@ -53,24 +91,6 @@ No world coordinate reaches the network, so it cannot memorise a city instead of
 learning to match. Output is `(delta, covariance, trust)` — what the classical
 repo's `LocalizationKF::Update` already consumes.
 
-## The picture that explains the problem
-
-Same frame, same oracle matching, different evidence:
-
-| every landmark class | lane geometry only |
-|---|---|
-| ![peak](docs/img/volume_all.svg) | ![ridge](docs/img/volume_lanes.svg) |
-| a peak: position is determined | a **ridge** along the road: sliding forward costs almost nothing |
-
-Lane lines run parallel to travel, so a hypothesis that has slid a metre down
-the road still lies on the same lines. Poles, signs and stop lines pin
-along-track position; removing them flattens the surface 31% along track while
-lateral and heading barely move.
-
-**The model does not report that surface** — it reports the cheaper one, which
-is a paraboloid with no ridge. Finding that out is what the tool was built for.
-`--mode fit` draws it; [RESULTS.md](docs/RESULTS.md) has the measurement.
-
 ## Three ideas worth taking
 
 **Solve the geometry, learn the correspondence.** Once the model has said which
@@ -81,9 +101,9 @@ goes to matching.
 That once carried an accuracy claim it could not support: against a plain
 regression baseline the first version **lost seven to one out of distribution**,
 because a rigid fit over confident wrong matches is unbounded and a `tanh` is
-not. The claim was retracted in place rather than edited away. The head is now a
-robust estimator, and the rematch split the difference: it wins heading by a
-factor of two and still loses translation.
+not. The claim was retracted in place. The head is now a robust estimator, and
+the rematch split the difference: it wins heading by a factor of two and still
+loses translation.
 
 **Compute the cost surface, do not predict it.** An MLP trained to draw cost
 surfaces produces ridges that look right without evidence behind them. The
@@ -101,18 +121,46 @@ survive, which TensorRT needs.
 
 - **The map is real; the detections are not.** Stage 0 is procedural, because
   KITTI ships no HD map and synthesizing one from ground truth makes the map a
-  function of the pose being predicted. M2a replaced it with nuScenes' surveyed
-  map on a geographically disjoint split — see [ROADMAP.md](docs/ROADMAP.md).
-- **Perception is an input.** No detector is trained, and none has been run yet:
-  detections are still cut from the map and corrupted, on both datasets. M2b
-  swaps in a pretrained online mapper's output; the file contract for it is
-  written and tested.
+  function of the pose being predicted. nuScenes' surveyed map arrived at M2a on
+  a geographically disjoint split.
+- **Perception is an input.** No detector is trained, and none has been run:
+  detections are still cut from the map and corrupted, on both datasets. The
+  file contract for a real one is written and tested.
 - **Open loop only.** The prior is drawn from a distribution, not produced by
-  the previous frame.
+  the previous frame, which flatters any localizer.
+- **0.44% of frames are confidently wrong.** The median frame is calibrated and
+  the tail-excluded ANEES is 1.03, but 39 frames of 8 880 have a covariance that
+  is catastrophically too small. Closed loop hands these to a Kalman filter, so
+  the open problem is detecting them, not rescaling everything.
 
 Full list: [OPEN_ITEMS.md](docs/OPEN_ITEMS.md).
 
-## Experiments
+## Running it
+
+```bash
+./scripts/setup.sh        # conda env + CPU torch
+./scripts/ci.sh           # format, lint, tests
+./scripts/run_smoke.sh    # train, evaluate, and draw a frame
+```
+
+No dataset, no GPU: the scenes are generated locally. CUDA training and the
+TensorRT export need Linux; everything else runs on macOS too, which is why
+`scripts/remote-ubuntu.sh` exists — edit on a laptop, run on the box.
+
+**What you need to train it.** The numbers here were measured on an A6000, but
+nothing requires one:
+
+| | VRAM reserved | fits |
+|---|---|---|
+| smoke run, tests | none — CPU | any laptop |
+| the student, batch 64 | 8.0 GiB | a 12 GB card |
+| the teacher, batch 40 | 19.1 GiB | **a 24 GB card — a 3090 or 4090** |
+
+The teacher's batch is 40 rather than 48 for exactly this reason: 48 would
+reserve about 23 GiB, which is 96% of a 24 GB card and too close to the edge.
+Halve `train.batch_size` for less, at some cost in throughput.
+
+### Experiments
 
 One checkpoint, less evidence — only the last needs its own training run:
 
@@ -125,80 +173,10 @@ tools/eval.py runs/base/best.pt --split test model.irls_iters=0                 
 tools/train.py --config configs/ablate_no_history.yaml                          # temporal
 ```
 
-The third is the one a public dataset cannot run cheaply. A dashed lane line is
-paint with ends, and a stripe end is along-track evidence in a class otherwise
-blind to it — but real vector maps store one continuous polyline plus a
-`mark_type` attribute, discarding the ends. Here the map does exactly that and
-the detector sees the stripes, so the question becomes a switch.
-
-## Numbers
-
-Test split, 8 880 frames, seeds disjoint from training. One RTX A6000, 37 000
-steps.
-
-| | trans | long | lat | yaw | recall @ 0.25 m, 0.5° |
-|---|---|---|---|---|---|
-| do nothing (the prior) | 1.611 | 1.497 | 0.596 | 0.993° | 1.3% |
-| all frames | **0.336** | 0.322 | 0.095 | 0.209° | **96.0%** |
-| *the architecture this replaced* | *0.521* | *0.498* | *0.154* | *0.590°* | *86.0%* |
-
-A 4.8× reduction on translation, 35% better than the model it replaced.
-
-**And 0.44% of frames are confidently wrong.** The median frame is calibrated
-and the tail-excluded ANEES is 1.03, but 39 frames of 8 880 have a covariance
-that is catastrophically too small. The next milestone hands `(delta, cov,
-trust)` to a Kalman filter, and those are the frames that would break it — so
-the open problem is detecting them, not rescaling everything.
-[RESULTS.md](docs/RESULTS.md) has what separates them.
-
-Three ablations worth the space, all one checkpoint under less evidence:
-
-| | trans | long |
-|---|---|---|
-| everything | **0.336** | 0.322 |
-| **as nuScenes was assumed to be** — no point landmarks | 1.061 | 1.057 |
-| lane geometry only | 1.371 | 1.367 |
-| no dashed stripe geometry | 0.339 | 0.328 |
-
-Lane geometry recovers essentially nothing along track (1.367 against a 1.497
-prior) while recovering 83% laterally — the asymmetry this project exists to
-measure. The dashes were once worth 16% of the longitudinal signal and are worth
-2%: the claim did not survive a correction to the detector's clutter model, and
-[RESULTS.md](docs/RESULTS.md) keeps both numbers with what changed between.
-
-### Compressed
-
-Same student, taught by a 25.8 M teacher instead of trained alone:
-
-| | params | test trans | recall @25cm |
-|---|---|---|---|
-| teacher | 25.83 M | 0.218 | 96.7% |
-| student, alone | 2.28 M | 0.336 | 96.0% |
-| student, distilled | 2.28 M | **0.264** | 95.5% |
-
-21% of the translation error, at identical deployment cost — the teacher is
-discarded after training.
-
-Pruning then bought nothing — until the model left PyTorch. Compiled to a
-TensorRT engine it runs **4× faster at identical precision**, 20.95 ms to
-5.28 ms, and the pruning that had been worth 0% is worth 6.6%. The compression
-measurement had been dominated by framework overhead.
-[RESULTS.md](docs/RESULTS.md) has both tables and what each stage cost.
-
-### On a real map
-
-nuScenes, geographically disjoint split, same architecture: **1.591 m to
-1.049 m** open loop, 0.713 m on trusted frames. A 1.5× reduction where generated
-scenes give 4.8×, and the gap is the finding — a generated world carries every
-class in comparable numbers, while nuScenes gives 13.8 lane-geometry detections
-a frame against 1.1 crossings and 0.6 traffic signs.
-
-It read 0.280 m until the map stopped being the detector. The reader chunked
-the map once at ingest and used that same element list as the source of
-detections, so both sides shared element endpoints at fixed world positions —
-a perfect along-track landmark, and exactly the failure `chunk_for_map`'s
-docstring had described in advance. [RESULTS.md](docs/RESULTS.md) has what it
-cost and the four bugs found before it.
+Restricted to lane geometry the model recovers essentially nothing along track —
+1.367 m against a 1.497 m prior — while recovering 83% laterally. That asymmetry
+is what this project exists to measure, and it is the one conclusion that has
+survived every correction to the instrument.
 
 ## Tools
 
@@ -213,6 +191,7 @@ cost and the four bugs found before it.
 | `tools/prune.py` | Remove feed-forward channels structurally, and say what it cost |
 | `tools/latency.py` | One forward pass at batch 1, p50 and p99, under a fixed protocol |
 | `tools/pareto.py` | Accuracy against latency, every configuration in one table |
+| `tools/plot_pareto.py` | Draw that table, so the shape of the result is visible |
 | `tools/export.py` | Checkpoint to ONNX, and on to a TensorRT engine |
 | `tools/trt_latency.py` | Time an engine, under the protocol the Pareto table uses |
 
