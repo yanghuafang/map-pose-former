@@ -229,6 +229,29 @@ everything while the pose is still bad. On an untrained model a 1 m σ keeps
 wide-to-narrow — graduated non-convexity, solving a nearly-convex problem first
 and deforming it into the hard one.
 
+## What is trained on
+
+`losses.py`. A loss on the pose does reach the assignment, since the solve is
+differentiable — but it is one three-vector of error explaining four hundred
+thousand weights, and many wrong assignments give a pose that is right on
+average.
+
+| term | answers |
+|---|---|
+| `match` | cross-entropy on the raw scores: *which* map point is this |
+| `matchable` | binary: does this detected point have a counterpart at all |
+| `pose` | what was actually asked for, and the only term that tells a near miss from a far one |
+
+The two matcher terms are supervised apart on purpose. The assignment carries
+matchability as a factor, so training on the product lets the model lower a
+"which" loss by declaring everything matchable — not an answer to the question.
+
+**There are no correspondence labels in the data**, because no real map records
+which detection came from which element. They are derived from the one label
+there is: apply the true correction and a detection lands on the element it
+came from. That makes the supervision exactly as good as the correction, which
+is the right dependence — and `tests/test_data.py` already guards it.
+
 ## Where the covariance comes from
 
 `solve.py`, and it has nothing fitted. Near the minimum the cost is
