@@ -11,6 +11,9 @@
 #   ./remote-ubuntu.sh --sync                            # copy and stop
 #   ./remote-ubuntu.sh --shell 'nvidia-smi; df -h ~'     # one-off probe
 #   ./remote-ubuntu.sh --detach tools/train.py --config configs/synth_base.yaml
+#   ./remote-ubuntu.sh --fetch runs/                     # everything trained
+#   ./remote-ubuntu.sh --fetch runs/distilled            # one run
+#   ./remote-ubuntu.sh --fetch runs/*/metrics.jsonl      # or just the numbers
 #
 # Copying is opt-in because it is the only destructive step: it is rsync
 # --delete against the remote checkout, so whatever is there is made to match
@@ -52,6 +55,11 @@ Run a command on the Ubuntu host, optionally mirroring this tree there first.
   remote-ubuntu.sh --shell 'nvidia-smi'    Run shell text rather than argv.
 
 Options:
+  --fetch P.. Copy paths back from the host, merging rather than mirroring.
+              --fetch runs/ brings everything; naming a run or a glob brings
+              less, which is usually what is wanted -- runs/ is hundreds of
+              megabytes and most of it is optimizer state nobody reads. Quote a
+              glob to have the host expand it.
   --sync      rsync --delete this working tree to the host. Anything edited
               only on the host, inside the checkout, is lost. Runs, datasets
               and checkpoints are kept outside it and are never touched.
@@ -79,9 +87,11 @@ EOF
 do_sync=false
 as_shell=false
 do_detach=false
+fetch=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --sync)    do_sync=true; shift ;;
+    --fetch)   shift; while [[ $# -gt 0 && "$1" != --* ]]; do fetch+=("$1"); shift; done ;;
     --shell)   as_shell=true; shift ;;
     --detach)  do_detach=true; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -90,10 +100,30 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ $# -eq 0 ]] && [[ "$do_sync" == false ]]; then
-  echo "Nothing to do: give a command, or --sync to place the tree." >&2
+if [[ $# -eq 0 ]] && [[ "$do_sync" == false ]] && [[ ${#fetch[@]} -eq 0 ]]; then
+  echo "Nothing to do: give a command, --sync to place the tree, or --fetch." >&2
   usage >&2
   exit 1
+fi
+
+# Pulling back is the opposite direction and deliberately not the opposite
+# flag. --sync mirrors, so it deletes; --fetch merges, because the laptop has
+# runs of its own and a mirror would remove them.
+#
+# It takes paths rather than assuming runs/. That directory holds every
+# checkpoint of every experiment, most of it last.pt and optimizer state that
+# nobody reads twice, so pulling all of it is usually a slow way to get one
+# file. --fetch runs/ still works when that is what you want.
+if [[ ${#fetch[@]} -gt 0 ]]; then
+  for want in "${fetch[@]}"; do
+    echo "Fetching ${REMOTE_HOST}:${REMOTE_DIR}/${want} -> ${repo_root}/"
+    # --relative keeps the remote path, so runs/distilled lands in
+    # runs/distilled rather than in the repository root.
+    # No --info=stats1: macOS still ships rsync 2.6.9, which does not have it.
+    rsync -az --relative \
+      "${REMOTE_HOST}:${REMOTE_DIR}/./${want}" "${repo_root}/" \
+      || echo "  nothing matched ${want}" >&2
+  done
 fi
 
 if [[ "$do_sync" == true ]]; then
