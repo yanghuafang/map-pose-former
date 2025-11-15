@@ -8,6 +8,7 @@
 | [RESULTS.md](RESULTS.md) | The measured numbers, and which are superseded |
 | [ROADMAP.md](ROADMAP.md) | The milestones, with what each one changes |
 | [OPEN_ITEMS.md](OPEN_ITEMS.md) | What is unfinished, unverified, or out of scope |
+| [RELEASE.md](RELEASE.md) | Publishing weights, and why they are not in git |
 
 Read them in that order. **Read `OPEN_ITEMS.md` before trusting a number** —
 every table in `RESULTS.md` is one run of one configuration, open loop, and

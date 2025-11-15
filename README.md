@@ -202,7 +202,8 @@ survived every correction to the instrument.
 | `scripts/status.sh` | What is training on the box, how far along, and whether runs are competing |
 | `scripts/run_smoke.sh` | Train, evaluate and visualise in minutes, on CPU |
 | `scripts/docs.sh` | Doxygen API reference from the docstrings |
-| `scripts/remote-ubuntu.sh` | Mirror this tree to the Ubuntu box and run there |
+| `scripts/remote-ubuntu.sh` | Mirror this tree to the Ubuntu box, run there, fetch results back |
+| `scripts/release.sh` | Assemble the trained artifacts and attach them to a GitHub release |
 | `scripts/download_*.sh` | nuScenes and Argoverse 2, resumable |
 
 ## Layout
