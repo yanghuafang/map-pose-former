@@ -323,3 +323,13 @@ term that a small divisor has inflated, the divisor decides whether the
 regulariser survives the addition at all. Widening to float64 does *not* fix
 it — measured, that still returned a negative eigenvalue. The floor does.
 
+## Reading order
+
+| | |
+|---|---|
+| `mapposeformer/data/sample.py` | one frame, start to finish |
+| `mapposeformer/solve.py` | the part with no parameters |
+| `mapposeformer/model/encoder.py` | tokens, and the equivariance claim |
+| `mapposeformer/model/matcher.py` | the assignment, and what it is scored in |
+| `mapposeformer/model/model.py` | how they compose |
+| `mapposeformer/losses.py` | what any of it is trained on |
