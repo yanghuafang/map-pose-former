@@ -204,28 +204,23 @@ Argoverse 2 comes after all three, as a generalization test never trained on.
 Its lane boundaries carry `mark_type`, which is the real-data version of the
 dash experiment.
 
-## M3 — Closed loop
+## Done — M3: closed loop
 
-Everything so far is open loop: one frame, one correction, error against the
-label. A deployment feeds the correction into a filter, and the next frame's
-prior is the previous frame's output.
+`LocalizationKF` holds the estimate, `engine/sequence.py` drives one scene at
+a time, `tools/run_sequence.py` reports the trajectory. **Translation RMSE
+falls from 0.336 m to 0.087 m, no scene diverges, and the confidently-wrong
+tail goes to zero.** [RESULTS.md](RESULTS.md) has the tables.
 
-This is where `LocalizationKF` returns: the model's `(delta, cov, trust)` is
-what it consumes, and `mass` is the second gate it should read. The honest
-comparison is a sequence run of both backends through the same filter and the
-same `eval_sequence` metrics.
+This milestone asked whether a small bias compounds instead of averaging out.
+It does not: what compounds is the evidence.
 
-The temporal path already fuses evidence open loop, so this measures something
-different: whether the correction survives being fed back, where a small
-systematic bias compounds instead of averaging out.
-
-**The prior's covariance becomes an input here**, and only here. Open loop the
-prior is drawn from a fixed distribution the model can simply learn. Closed loop
-the filter produces a per-frame `3 × 3` — tight after a good update, wide after
-a run of rejections — and a model that knows how far to look can match
+**Still open here.** The prior's covariance is not yet a model input. Open loop
+the prior is drawn from a fixed distribution the model can simply learn; closed
+loop the filter produces a per-frame `3 × 3` — tight after a good update, wide
+after a run of rejections — and a model that knows how far to look could match
 differently in the two cases. It also closes an inconsistency: the surface's
 extent is pinned to a fixed truncation bound, so a wider prior has no correct
-cell.
+cell. The two pose backends have also not been run through the same filter.
 
 ## M4 — Make it fast
 

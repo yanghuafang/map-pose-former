@@ -553,7 +553,7 @@ def _detect(
     )
 
 
-def _measured_egomotion(
+def measured_egomotion(
     curr: Tensor, past: Tensor, p: EgoParams, gen: torch.Generator
 ) -> Tensor:
     """``curr⁻¹ ∘ past`` as odometry reports it, drift growing with travel.
@@ -583,6 +583,7 @@ def build_sample(
     seed: int,
     sp: SampleParams,
     detector=None,
+    prior_pose: Tensor | None = None,
 ) -> dict[str, Tensor]:
     """One frame: anchored map, anchored detections, history, and the transform.
 
@@ -597,6 +598,11 @@ def build_sample(
         drift. Distinct from the world seed so the same geometry can be re-run
         under new noise.
     @param sp Cropping, tokenisation, and all three noise models.
+    @param prior_pose Use this pose as the prior instead of drawing one. This
+        is what closes the loop: a sequence run hands back the filter's own
+        estimate, so the map is cropped where the vehicle believes it is
+        rather than where a fresh draw put it. The draw still happens, so the
+        detection noise below is the same sample either way.
 
     @return A dict of fixed-shape tensors; see ``docs/ARCHITECTURE.md`` for the
         table of shapes, frames and units.
@@ -621,7 +627,7 @@ def build_sample(
             )[0],
         ]
     )
-    prior = G.compose(gt, err)
+    prior = G.compose(gt, err) if prior_pose is None else prior_pose.float()
     delta = G.relative(prior, gt)
 
     map_el = _visible_map(
@@ -642,7 +648,7 @@ def build_sample(
             hist.append(_detect(world, past, keep, sp, gen))
         else:
             hist.append(_from_detector(detector(f), keep, sp))
-        rel.append(_measured_egomotion(gt, past, sp.ego, gen))
+        rel.append(measured_egomotion(gt, past, sp.ego, gen))
     e, p = sp.max_det_elements, sp.points_per_element
 
     def stack(key: str, shape: tuple[int, ...]) -> Tensor:

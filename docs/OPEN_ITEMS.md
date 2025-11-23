@@ -15,13 +15,14 @@ infer any of it from an absence.
   detections are cut from the map. **M2b is the experiment**, not a refinement
   of this one.
 
-- **0.44% of frames are confidently, wildly wrong.** The median frame is
-  calibrated (NEES/dof 0.78) and excluding the tail ANEES is 1.03, so the
-  covariance is honest almost everywhere — but 39 frames of 8 880 sit above
-  NEES/dof 10, one at 3 707. M3 feeds this to a Kalman filter, and those frames
-  are what would break it. **This blocks closed loop.** The fix is to detect
-  them, not to rescale: the match/volume disagreement separates them best
-  (25.6% recall at 1% FPR) and is already computed and used for nothing.
+- **A quarter of a percent of frames are confidently, wildly wrong.** The median
+  frame is calibrated (NEES/dof 0.77) and excluding the tail the mean is 1.02,
+  so the covariance is honest almost everywhere — but 21 frames of 8 880 sit
+  above NEES/dof 10, the worst at 1 104. **No single-frame detector reaches
+  them.** Assignment mass separates them best, at AUC 0.77, which is not enough
+  to act on. **It no longer blocks anything**: closed loop the tail over the
+  same split is zero. The open-loop tail is real and still undetected; what
+  changed is that nothing downstream needs it detected.
 - **The second refinement pass costs accuracy, not just time**: 0.316 with
   `refine_iters=1` against 0.336 with two, for half the step time. It read as a
   wash before the clutter rule was corrected. The model was trained with two
@@ -37,6 +38,12 @@ infer any of it from an absence.
 - **One real dataset, one split, one seed.** M2a reads nuScenes; Argoverse 2 is
   the untrained-on generalization test and has not been touched. Every number
   here is a single run of a single configuration.
+- **Closed loop runs on simulated odometry.** The filter integrates the same
+  drift model the samples carry, 1% of distance travelled, and frames sit 8 m
+  apart. Both are favourable: real odometry is biased rather than merely noisy,
+  and a longer gap between corrections gives the estimate more room to drift.
+  The closed-loop numbers should be read as what the loop does when its inputs
+  behave, which is the question this milestone asked.
 - **No real perception.** Detections are cut from the map and corrupted, so both
   point sets are the same polylines with noise on top. This is as true of the
   nuScenes path as of the synthetic one: M2a made the *map* real and left
@@ -44,8 +51,11 @@ infer any of it from an absence.
   different chunking, geometry that bends the wrong way at range, missing pieces
   and hallucinated topology, none of which is modelled. M2b addresses this by
   running a pretrained mapper, not by training one.
-- **No closed-loop evaluation.** The prior is drawn from a distribution rather
-  than produced by the previous frame's output. M3.
+- **Closed loop is synthetic and single-backend.** M3 runs the loop, but only
+  on generated scenes and only through the Procrustes head. nuScenes has never
+  been driven through a filter, and the regression backend has not been run
+  against the same one — which is the comparison that would say whether its
+  off-distribution collapse matters when the prior is always good.
 - **Deployment stops at the ONNX.** Compression and the runtime are measured
   (M4), but nothing here runs inside the system it was written for: the C++
   TensorRT backend that would plug into camera-map-localization, so that one

@@ -210,6 +210,60 @@ will report physics running backwards.** Four real bugs were found and fixed
 while it was broken, and each fix looked like progress because the numbers
 moved.
 
+## M3 — closed loop
+
+Everything above is open loop: a prior drawn from a fixed distribution, one
+correction, error against the label, each frame independent of the last. Closed
+loop the prior is the previous frame's answer carried forward by odometry, so a
+mistake is inherited rather than forgotten. `LocalizationKF` holds the estimate
+and `tools/run_sequence.py` drives it over the same 120 test scenes, 74 frames
+each.
+
+| | open loop | closed loop | factor |
+|---|---|---|---|
+| trans | 0.336 | **0.087** | 3.9× |
+| long | 0.322 | 0.056 | **5.8×** |
+| lat | 0.095 | 0.067 | 1.4× |
+| yaw | 0.209° | 0.118° | 1.8× |
+| NEES/dof median *(0.789 is calibrated)* | 0.786 | 0.796 | — |
+| frames above NEES/dof 10 | 0.42% | **0.00%** | — |
+
+**Feeding the correction back makes it better, not worse**, by 3.9× on
+translation, and no scene diverges. The worry this milestone was written to
+test — that a small bias compounds instead of averaging out — does not
+materialise; what compounds instead is the evidence. The mechanism is not
+subtle: a good prior crops the map where the vehicle actually is, so the
+correction the model has to find is small, and a small correction is the regime
+it is most accurate in.
+
+**The two columns are not the same quantity**, and the factor should be read
+knowing it. Open loop is a single frame's error against a prior drawn up to
+4.5 m away; closed loop is a filtered estimate over seventy-four frames, each
+handed a prior that is already good. A filter beating one measurement is what a
+filter is for. 3.9× is the square root of fifteen, so about fifteen of those
+frames are contributing independently — which is what averaging predicts, and
+not evidence that the model improved. Nothing about the model changed.
+
+**Where the gain lands is the part worth reading.** Time buys 5.8× along track
+and 1.4× across it. Lateral error is already well constrained within one frame,
+so there is little for integration to add; longitudinal is the axis every table
+above reports as the weak one, for the reason
+[classes.py](../mapposeformer/data/classes.py) gives — the evidence that fixes
+it arrives intermittently. Accumulating intermittent evidence is precisely what
+a filter does, and this is the first thing in the project to substantially close
+that gap.
+
+**The tail closes.** `OPEN_ITEMS.md` called the 0.42% of frames that are
+confidently, wildly wrong the thing that blocks this milestone. Closed loop
+that figure is zero, and the filter's own covariance is calibrated to 0.796
+against a target of 0.789. The frames still arrive; the filter's averaging
+absorbs them, because one bad correction against a tight prior earns a small
+Kalman gain and the next frame pulls it back.
+
+```bash
+tools/run_sequence.py runs/m1_base/best.pt --split test
+```
+
 ## M4 — distillation
 
 `configs/synth_teacher.yaml` then `configs/synth_distill.yaml`, both step-matched

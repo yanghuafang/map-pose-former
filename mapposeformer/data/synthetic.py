@@ -67,6 +67,44 @@ class SyntheticDataset(Dataset):
             self._cache[scene] = (world, chunked)
         return self._cache[scene]
 
+    # --- Sequential access, which the closed loop needs and training does not.
+    #
+    # A trainer reads frames independently and shuffled. A filter cannot: it
+    # needs one scene's frames in trajectory order, and it needs to supply the
+    # prior rather than accept a drawn one. These three methods are that
+    # access, and they are all ``engine/sequence.py`` asks of a source.
+
+    def truth_at(self, key: int, frame: int):
+        """@return The true pose at that frame.
+
+        The odometry a sequence run integrates is simulated from
+        consecutive truths, and the error it reports is measured
+        against them.
+        """
+        return self._world(key)[0].trajectory[frame]
+
+    def sequences(self) -> list[int]:
+        """@return One key per scene, in a stable order."""
+        return list(range(self.n_scenes))
+
+    def frames_of(self, key: int) -> list[int]:
+        """@return That scene's frames, in trajectory order."""
+        return list(self._frames)
+
+    def sample_at(
+        self, key: int, frame: int, prior_pose: torch.Tensor | None = None
+    ) -> dict[str, torch.Tensor]:
+        """@brief One frame, with the prior supplied rather than drawn.
+
+        Never augmented: a sequence run is evaluation, and epoch 0 is what the
+        validation split already uses.
+        """
+        world, chunked = self._world(key)
+        seed = ((self.base + key) * 100_003 + frame) * 97
+        return build_sample(
+            world, chunked, frame, seed, self.p.sample, prior_pose=prior_pose
+        )
+
     def __len__(self) -> int:
         return self.n_scenes * len(self._frames)
 

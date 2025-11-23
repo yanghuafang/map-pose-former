@@ -481,6 +481,44 @@ class NuScenesDataset(Dataset):
         """Reseed the noise for a new epoch, matching the synthetic dataset."""
         self._epoch = epoch
 
+    # --- Sequential access. See the synthetic dataset for why it exists;
+    # the two sources answer the same three questions so the closed loop
+    # cannot tell them apart either.
+
+    def truth_at(self, key: str, frame: int):
+        """@return The true pose at that frame.
+
+        The odometry a sequence run integrates is simulated from
+        consecutive truths, and the error it reports is measured
+        against them.
+        """
+        return self._world(key)[0].trajectory[frame]
+
+    def sequences(self) -> list[str]:
+        """@return One key per scene, in the split's order."""
+        return list(self.names)
+
+    def frames_of(self, key: str) -> list[int]:
+        """@return That scene's frames, in capture order."""
+        return [f for name, f in self._index if name == key]
+
+    def sample_at(
+        self, key: str, frame: int, prior_pose: Tensor | None = None
+    ) -> dict[str, Tensor]:
+        """@brief One frame, with the prior supplied rather than drawn."""
+        world, chunked = self._world(key)
+        stable = zlib.crc32(key.encode()) & 0xFFFFF
+        seed = stable * 100_003 + frame * 97
+        return build_sample(
+            world,
+            chunked,
+            frame,
+            seed,
+            self.p.sample,
+            self._detector(key),
+            prior_pose=prior_pose,
+        )
+
     def __len__(self) -> int:
         return len(self._index)
 

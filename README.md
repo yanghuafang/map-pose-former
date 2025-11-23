@@ -31,6 +31,11 @@ Test split, 8 880 generated frames, seeds disjoint from training. One RTX A6000.
 A 4.8× reduction on translation, 35% better than the model it replaced. On
 nuScenes, on a geographically disjoint split, 1.591 m to 1.049 m.
 
+Those are single frames, each given a prior drawn up to 4.5 m off. Fed back
+through a Kalman filter instead, the same model holds **0.087 m** over the same
+split with no scene diverging — 5.8× along track, where the evidence is
+thinnest and one frame has least to say.
+
 Then made small and fast, which is what the project is for:
 
 | | params | trans | p50 latency |
@@ -126,12 +131,14 @@ survive, which TensorRT needs.
 - **Perception is an input.** No detector is trained, and none has been run:
   detections are still cut from the map and corrupted, on both datasets. The
   file contract for a real one is written and tested.
-- **Open loop only.** The prior is drawn from a distribution, not produced by
-  the previous frame, which flatters any localizer.
-- **0.44% of frames are confidently wrong.** The median frame is calibrated and
-  the tail-excluded ANEES is 1.03, but 39 frames of 8 880 have a covariance that
-  is catastrophically too small. Closed loop hands these to a Kalman filter, so
-  the open problem is detecting them, not rescaling everything.
+- **The prior's covariance is not a model input.** The filter knows how
+  uncertain it is; the model sees a fixed crop either way, so it cannot look
+  further when the estimate is poor.
+- **0.42% of frames are confidently wrong.** The median frame is calibrated and
+  the tail-excluded ANEES is 1.04, but that fraction of 8 880 has a covariance
+  catastrophically too small, and no single-frame score detects them. Closed
+  loop the filter's averaging absorbs them and the tail is zero, so this is an
+  open-loop problem that nothing downstream currently needs solved.
 
 Full list: [OPEN_ITEMS.md](docs/OPEN_ITEMS.md).
 
