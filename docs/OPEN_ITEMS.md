@@ -23,11 +23,13 @@ infer any of it from an absence.
   to act on. **It no longer blocks anything**: closed loop the tail over the
   same split is zero. The open-loop tail is real and still undetected; what
   changed is that nothing downstream needs it detected.
-- **The second refinement pass costs accuracy, not just time**: 0.316 with
-  `refine_iters=1` against 0.336 with two, for half the step time. It read as a
-  wash before the clutter rule was corrected. The model was trained with two
-  passes, so this is not the same as training with one — but the direction has
-  changed and that experiment is now worth its hour.
+- **One refinement pass beats two, and the default still says two.** Trained
+  with one, test translation is 0.221 against 0.336 at 1.9× the throughput, and
+  calibration and closed loop both improve as well — [RESULTS.md](RESULTS.md)
+  has the pair. The default is unmoved because changing it means retraining the
+  teacher, the student and the pruned variants, and this is one seed. Recorded
+  alongside it is the trap: a checkpoint trained for two passes must be
+  evaluated at two, and is 36× worse in the loop at one.
 - **The reported covariance is optimistic where the map aliases.** The surface is
   computed with correspondences fixed, making it the curvature of the fit rather
   than the ambiguity of the match: measured, it is steeper along track than

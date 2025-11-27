@@ -556,36 +556,62 @@ degrades far more gracefully when the evidence is wrong. The honest reading is
 that neither is dominant, and the parameter-free head is justified by rotation
 accuracy, interpretability and quantization behaviour rather than by RMSE.
 
-### fp16, and why not bf16
+## M1 — one refinement pass, not two
 
-A strongly typed engine takes its precision from the graph, so the choice is
-made at export rather than at build. Both reduced formats are sixteen bits and
-they spend them differently: fp16 keeps ten mantissa bits, bf16 keeps seven and
-buys fp32's exponent range with the difference. Cast whole -- weights and
-inputs -- on the test split:
+`refine_iters` runs the trunk again over detections moved by the first pass's
+answer: a full forward, no parameters. The default was two.
+[OPEN_ITEMS.md](OPEN_ITEMS.md) recorded that evaluating the two-pass checkpoint
+at one pass scored better -- 0.316 against 0.336 -- and that this was not the
+same as training with one. It is not, and the gap runs both ways.
 
-| | trans | long | lat | yaw | NEES/dof median |
-|---|---|---|---|---|---|
-| **student**, fp32 | 0.336 | 0.322 | 0.095 | **0.209°** | **0.786** |
-| fp16 | 0.336 | 0.322 | 0.095 | 0.211° | 0.815 |
-| bf16 | 0.332 | 0.318 | 0.095 | 0.335° | 1.479 |
-| **distilled**, fp32 | 0.264 | 0.246 | 0.097 | **0.215°** | **0.811** |
-| fp16 | 0.263 | 0.244 | 0.097 | 0.217° | 0.838 |
-| bf16 | 0.266 | 0.247 | 0.097 | 0.338° | 1.501 |
+**Evaluating at a pass count you did not train for is catastrophic, and open
+loop cannot see it:**
 
-**Translation does not notice and heading does.** bf16 resolves a 40 m map
-coordinate to 12.5 cm where fp16 resolves 1.56 cm, and 12.5 cm across a 40 m
-baseline subtends 0.18° -- the size of the heading error being measured.
-Position averages that away over the points in a frame; an angle cannot.
+| the two-pass checkpoint, evaluated at | trans | NEES/dof median | closed loop |
+|---|---|---|---|
+| two passes, as trained | 0.336 | **0.786** | **0.087** |
+| one pass | **0.316** | 0.146 | 3.182 |
 
-**What it really costs is the covariance.** The median NEES/dof goes from 0.79
-to 1.48, so the uncertainty the model reports is about half the error it should
-describe. Anything downstream that weights by that covariance is being lied to,
-and the calibration is the part of this model most worth trusting.
+Six percent better on RMSE and thirty-six times worse in the loop. The
+covariance is what breaks. A single pass leaves a broader surface, so the
+reported variance is five times too wide, the filter under-weights every
+correction it is given, and 3.3% of scenes diverge with the trust head refusing
+in runs of seventy-four frames. RMSE alone reports none of that.
 
-So the export is fp16, and `--half` means fp16 rather than merely sixteen bits.
-bf16 would also need Ampere or newer, where fp16 runs on older cards too.
+**Trained with one pass, one pass wins outright.** Same seed, same data, the
+same 2 283 397 parameters -- refinement adds none -- and one flag apart:
 
+| | two passes | one pass |
+|---|---|---|
+| best val trans | 0.3048, step 33 300 | **0.2123, step 9 250** |
+| test trans | 0.336 | **0.221** |
+| test, trusted frames | 0.297 | **0.186** |
+| ANEES *(1.0 is honest)* | 4.783 | **1.820** |
+| NEES/dof median *(0.789 is calibrated)* | **0.786** | 0.744 |
+| frames above NEES/dof 10 | 0.42% | **0.36%** |
+| closed loop trans | 0.087 | **0.083** |
+| closed loop NEES/dof median | 0.795 | **0.788** |
+| frames per second | 173 | **327** |
+
+A third less error, a mean four times better behaved, a smaller tail, and 1.9x
+the throughput. It also reaches its best 3.6x sooner in steps, so the compute
+spent to get there is roughly seven times less.
+
+**Why two ever looked right** is the first table: a checkpoint trained for two
+is plainly worse at one, and that is the reading the earlier note took. The
+pass count is not free to change after training, which is what made a true
+statement about RMSE point the wrong way.
+
+**What this does not settle.** One seed. And both runs end past their best --
+one pass by 19%, two by 10% -- so 37 000 steps is the wrong budget for the
+faster configuration and a shorter schedule may beat both. The default is left
+at two because moving it means retraining the teacher, the distilled student
+and the pruned variants, and one seed does not buy that.
+
+```bash
+tools/train.py --config configs/synth_base.yaml model.refine_iters=1 \
+    train.out_dir=runs/refine1
+```
 
 ## Identities, each with a test
 
