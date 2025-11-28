@@ -1,0 +1,17 @@
+# The reference run: generated data, one RTX A6000, a few hours.
+#
+# Everything not listed here is the dataclass default -- see
+# mapposeformer/config.py and the params dataclasses it composes. Defaults are
+# the design; this file is the scale the design is measured at.
+data:
+  # 800 scenes is where validation stopped improving with more. The test split
+  # is larger than validation because every published number comes off it.
+  num_scenes: {train: 800, val: 60, test: 120}
+train:
+  epochs: 40
+  # The loader is the limit, not the model -- measure the input side before
+  # believing any model-side optimisation is worth having.
+  batch_size: 64
+  num_workers: 16
+  amp: bf16
+  out_dir: runs/base
