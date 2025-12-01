@@ -685,6 +685,26 @@ are not what is large here** —
 which is why the compression milestone measures the teacher as well as the
 student, rather than reporting a flat table and explaining it afterwards.
 
+**A forward pass costs a fraction of that.** Nothing is kept for backward, so
+each layer's scores are freed as they are used and the peak is roughly one
+layer's working set rather than the sum over four layers and two passes:
+
+| | batch 1 | batch 64 |
+|---|---|---|
+| inference | **31 MiB** | 0.68 GiB |
+| training | 137 MiB | 7.00 GiB |
+
+Ten times less, and 31 MiB at batch 1 — of which 8.7 MiB is the weights — is
+the number that says this model runs anywhere. An engine is lower still.
+
+**Where the 6.9 GiB goes**, since *activation-bound* is easy to say and worth
+counting. One token per *point*: 96 detection elements and 72 map elements at
+eight points each, plus a null token on each side, is 1 346 tokens. Per layer
+that is 7.25 M attention scores across the four stacks, and four layers by two
+refinement passes is 58 M per sample — 6.9 GiB at batch 64 in bf16, against
+0.16 GiB for the token features those scores are computed from. The quadratic
+term is the tokenisation, not the model.
+
 At ~6% of the card's dense bf16 throughput the model uses the GPU poorly, and
 that is a property of its shape rather than of its batch size: `head_dim` is 32,
 and every attention matmul contracts over it. [OPEN_ITEMS.md](OPEN_ITEMS.md)

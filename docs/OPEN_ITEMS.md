@@ -147,6 +147,11 @@ protocol but not used in training.
 - **Pruning scores by weight magnitude**, which ignores what the activations
   do. A Taylor or activation-aware criterion is the obvious next thing to try,
   and the prune/fine-tune/re-measure cycle is what would say whether it pays.
+
+- **One token per point, not per element.** 96 detection elements and 72 map
+  elements become 1 346 tokens, and attention is quadratic in that: 58 M scores
+  per sample, 6.9 GiB at batch 64, against 0.16 GiB for the token features they
+  come from. That ratio, not the parameter count, is what this model spends.
 - **Element caps truncate.** 72 map elements, 32 detections per frame. Overflow
   drops the farthest — the right ordering, but not reported per frame.
 - **Clutter has no *structured* confusion model.** False positives now draw
