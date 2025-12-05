@@ -8,7 +8,8 @@ The numbering is chronological, not causal, and the difference matters because
 the second half is the stated purpose of the project:
 
 ```
-M1 measurement ──┬── M2 nuScenes ── M3 closed loop
+M1 measurement ──┬── M2 nuScenes
+                 ├── M3 closed loop
                  └── M4 make it fast (runtime first, then compression)
 ```
 
@@ -89,7 +90,7 @@ rescale. It blocks M3 either way. And **the head rematch did not go the closed
 form's way**: robustness narrowed the out-of-distribution gap from 7× to 4.9×
 and no further, though the closed form wins heading by a factor of two.
 
-### Done: the export smoke test, pulled forward from M5
+### Done: the export smoke test, pulled forward from M4
 
 Every milestone below assumes the graph exports, and that assumption was wrong.
 `torch.export` captured the model, but ONNX conversion failed on
@@ -97,7 +98,7 @@ Every milestone below assumes the graph exports, and that assumption was wrong.
 the age embedding, and replaced by `expand`/`reshape` at no cost. The default
 config now exports and matches eager to 1.2e-5; `tests/test_export.py` holds it.
 
-Found in an hour, at M1, where the fix was one line. Found at M5 it would have
+Found in an hour, at M1, where the fix was one line. Found at M4 it would have
 been one line on top of everything built above it.
 
 ### Open: a surface that shows ambiguity
@@ -123,7 +124,7 @@ cross-attention, where the bounded prior makes a cross-set distance meaningful.
 GeoTransformer puts its structure embedding in *self*-attention, with distances
 and triplet angles. Untried here.
 
-## M2 — nuScenes
+## M2 — nuScenes: M2a done, M2b and M2c open
 
 **M2a is done and its answer is a qualified yes; M2b has a contract and no
 detector; M2c is unstarted.**
@@ -222,7 +223,7 @@ differently in the two cases. It also closes an inconsistency: the surface's
 extent is pinned to a fixed truncation bound, so a wider prior has no correct
 cell. The two pose backends have also not been run through the same filter.
 
-## M4 — Make it fast
+## M4 — Make it fast: M4b done, M4a started
 
 Two phases, and **the runtime comes first**. Compression is measured in a
 runtime, so the runtime has to exist before any of it means anything — see
@@ -301,7 +302,7 @@ In this order, because each stage changes what the next works with:
    student's weights; the rest is inside `nn.MultiheadAttention` and out of
    reach, so this shrinks the weights by a third rather than three quarters.
    **Run: accuracy is untouched at 8 bits**, 0.261 either way. The speed
-   question is M5's, because it needs integer kernels.
+   question is M4a's, because it needs integer kernels.
 
 Report a Pareto table: accuracy against latency, one row per configuration.
 
@@ -317,20 +318,12 @@ Step-matching is the protocol, not epoch-matching. `synth_teacher.yaml` names
 came out 8× short. The teacher gets the same optimizer budget the student had;
 whether it needs more is a question its first run answers.
 
-| stage | estimate | basis |
-|---|---|---|
-| teacher training, 37 000 steps | **~7.0 h** | 1.48 M frames ÷ 59 |
-| student training, 37 000 steps | ~3.5 h | 2.37 M ÷ 190 |
-| distillation, teacher outputs cached | **~3.5 h** | one teacher pass (4 min), then the student's own rate |
-| distillation, teacher run live | ~7.0 h | `1/(1/190 + 1/188)` = 95 frames/s |
-| pruning: fine-tune, three cycles | ~2.6 h | each fine-tune ≈ 25% of a run |
-| quantization: PTQ calibration | ~1 min | 512 batches forward at 689 frames/s |
-| quantization: QAT fine-tune | ~1.5 h | ≈30% of a run at ~1.4× step cost |
-| TensorRT: export, three engines, benchmark | **<1 h** | INT8 build with calibration is the long pole |
-
-**About sixteen hours end to end**, most of it the teacher. Caching the
-teacher's outputs saves 3.5 h at 48 GB for the assignment matrices; it works
-only on real data, since the synthetic stage redraws its noise every epoch.
+Every stage of this chain has since been run except the QAT fine-tune, so these
+are costs rather than forecasts: **about sixteen hours end to end**, of which
+the teacher is seven and the student three and a half. Caching the teacher's
+outputs saves 3.5 h at 48 GB for the assignment matrices, and works only on real
+data — the synthetic stage redraws its noise every epoch.
+[RESULTS.md](RESULTS.md) reports what each stage bought.
 
 VRAM is the other constraint worth naming, and it is linear in batch size:
 measured, 0.108 GiB per sample for the student and 0.445 for the teacher. At
