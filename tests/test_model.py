@@ -412,3 +412,25 @@ def test_gradient_accumulation_matches_one_large_batch():
     a = torch.cat([g.flatten() for g in single])
     b = torch.cat([g.flatten() for g in accumulated])
     assert float((a - b).norm() / a.norm()) < 1e-3
+
+
+def test_geometric_assignment_is_mutual_and_class_constrained():
+    """The baseline matcher's contract: no pair survives that is padded, of a
+    different class, or not each other's nearest."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+    from baseline_matcher import geometric_assign
+
+    det = torch.tensor([[[0.0, 0.0], [10.0, 0.0], [0.0, 0.0]]])
+    mp = torch.tensor([[[0.1, 0.0], [10.1, 0.0]]])
+    ok_d = torch.tensor([[True, True, False]])
+    ok_m = torch.tensor([[True, True]])
+    cls_d = torch.tensor([[0, 0, 0]])
+    cls_m = torch.tensor([[0, 1]])
+
+    w = geometric_assign(det, ok_d, cls_d, mp, ok_m, cls_m, sigma=1.0)
+    assert w[0, 2].sum() == 0.0, "padded detection matched"
+    assert w[0, 1, 1] == 0.0, "matched across classes"
+    assert w[0, 0, 0] > 0.0, "the one legitimate pair was dropped"

@@ -530,6 +530,50 @@ What 2 000 steps cannot say is what history is worth at convergence; M0 needed
 tools/train.py --config configs/synth_base.yaml train.max_steps=2000
 tools/train.py --config configs/ablate_no_history.yaml train.max_steps=2000
 ```
+
+## M1 — does the matcher need to be learned?
+
+Every ablation here varies something *inside* the learned matcher: which
+classes it sees, which head reads it, how many passes it takes. None asks
+whether it needs to be learned. `tools/baseline_matcher.py` asks. Same anchored
+point sets, same closed-form pose head, same cost surface, same evaluator, with
+the assignment produced by mutual nearest neighbour under a Gaussian kernel and
+nothing trained.
+
+| | trans | recall @ 0.25 m, 0.5° | of the prior's error removed |
+|---|---|---|---|
+| *the prior* | *1.611* | *1.3%* | — |
+| geometric, one pass | 1.468 | 10.1% | 9% |
+| geometric, two passes | 1.433 | 15.3% | 11% |
+| geometric, five passes | 1.379 | 24.5% | 14% |
+| geometric, ten passes | 1.349 | 29.0% | 16% |
+| **learned** | **0.336** | **96.0%** | **79%** |
+
+Iterating the baseline is the fair comparison: the model re-matches after moving
+detections, so a one-shot classical matcher would be losing to ICP rather than
+to a transformer. Given ten passes against the model's two it closes almost
+none of the gap.
+
+**Nearest neighbour cannot resolve this association, and the reason is the
+observability problem this whole project is built on.** With 1.5 m of
+along-track prior error and lane dashes every few metres, the nearest map point
+to a detection is routinely the wrong one -- the next dash along, or the
+parallel lane's. Proximity is ambiguous exactly where the evidence is weakest.
+What the trunk supplies is context: *which* of four parallel lines this is,
+which is what the self-attention was put there for.
+
+**The covariance is most of the way there without any learning.** The baseline
+reports the raw surface with the learned scale zeroed, and its NEES/dof median
+is 0.465 against a target of 0.789 -- pessimistic by a factor under two, not
+wrong by orders of magnitude. The surface construction supplies the shape of
+the uncertainty and the learned scale supplies the rest. The two rows are not
+scoring the same poses, so this is a weaker claim than the table, but it says
+the calibration is not something training invents from nothing.
+
+```bash
+tools/baseline_matcher.py --split test --iters 10
+```
+
 ## M1 — the head rematch
 
 The robust solve against the `tanh`-bounded regression baseline that beat its
