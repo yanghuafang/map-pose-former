@@ -93,19 +93,54 @@ def test_it_refuses_to_calibrate_an_unquantized_model():
         calibrate(MapPoseFormer(ModelParams()), [_batch(2)])
 
 
-def test_half_the_weights_are_out_of_reach():
-    """INT8 shrinks the student by a third, not by three quarters.
+def test_quantization_reaches_attention():
+    """INT8 shrinks the student to near a quarter, which needs attention.
 
-    Half its parameters sit inside `nn.MultiheadAttention`, which the wrapper
-    has to skip because the parent reads `out_proj.weight` itself. The same
-    module blocks structured head pruning, for the same reason -- two of M4's
-    three stages stopped by one module choice, which is what
-    docs/OPEN_ITEMS.md wants replaced.
+    It used to shrink it by a third. Half the parameters sat inside
+    `nn.MultiheadAttention`, whose input projection is one packed Parameter
+    rather than a Linear, and both quantization and structured pruning walk the
+    module tree looking for Linear -- two of M4's three stages stopped by one
+    module choice. `model/attention.py` splits that projection into four
+    Linears at identical arithmetic, and this is the test that says so.
     """
     model = MapPoseFormer(ModelParams())
     total = sum(p.numel() for p in model.parameters())
     reachable = sum(c.weight.numel() for _, _, c in _linears(model))
-    assert 0.45 < reachable / total < 0.55, reachable / total
+    assert reachable / total > 0.95, reachable / total
 
     fp32, int8 = weight_bytes(model)
-    assert 0.6 < int8 / fp32 < 0.7, (fp32, int8)
+    assert 0.25 < int8 / fp32 < 0.30, (fp32, int8)
+
+
+def test_unpacking_attention_is_lossless():
+    """A checkpoint trained before the split must load after it, unchanged.
+
+    The arithmetic is torch's; only the layout differs. If this drifts, every
+    published checkpoint silently becomes a different model.
+    """
+    import torch.nn as nn
+
+    from mapposeformer.model.attention import (
+        MultiheadAttention,
+        unpack_attention,
+    )
+
+    torch.manual_seed(0)
+    dim, heads = 64, 4
+    ref = nn.MultiheadAttention(dim, heads, batch_first=True).eval()
+    ours = MultiheadAttention(dim, heads).eval()
+    ours.load_state_dict(unpack_attention(ref.state_dict()))
+
+    q, k = torch.randn(3, 7, dim), torch.randn(3, 11, dim)
+    pad = torch.zeros(3, 11, dtype=torch.bool)
+    pad[:, -3:] = True
+    with torch.no_grad():
+        a, _ = ref(q, k, k, key_padding_mask=pad, need_weights=False)
+        b, _ = ours(q, k, k, key_padding_mask=pad, need_weights=False)
+    assert torch.equal(a, b)
+
+    bias = torch.randn(3, heads, 7, 11).reshape(-1, 7, 11)
+    with torch.no_grad():
+        a, _ = ref(q, k, k, attn_mask=bias, need_weights=False)
+        b, _ = ours(q, k, k, attn_mask=bias, need_weights=False)
+    assert torch.equal(a, b)

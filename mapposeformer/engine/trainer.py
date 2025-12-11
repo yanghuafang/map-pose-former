@@ -30,6 +30,7 @@ from mapposeformer.distill import (
 )
 from mapposeformer.engine.evaluator import evaluate, format_report
 from mapposeformer.losses import compute_losses
+from mapposeformer.model.attention import unpack_attention
 from mapposeformer.model.model import MapPoseFormer
 
 
@@ -185,7 +186,7 @@ class Trainer:
             self.prune_plan = plan
             width = min(plan.values())
             print(f"pruned init: {len(plan)} feed-forwards to {width}")
-        self.model.load_state_dict(ckpt["model"])
+        self.model.load_state_dict(unpack_attention(ckpt["model"]))
         self.model.to(self.device)
         print(f"initialised from {path}")
 

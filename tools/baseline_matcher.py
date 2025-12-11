@@ -32,6 +32,7 @@ from mapposeformer.config import parse_overrides, upgrade, with_overrides
 from mapposeformer.data import build_dataset
 from mapposeformer.engine import evaluate, format_report
 from mapposeformer.model import MapPoseFormer
+from mapposeformer.model.attention import unpack_attention
 from mapposeformer.model.pose_head import ProcrustesPoseHead
 from mapposeformer.model.volume_head import VolumeHead
 
@@ -169,7 +170,7 @@ def main() -> int:
         f"geometric, sigma={args.sigma}, iters={args.iters}",
     )
     learned = MapPoseFormer(cfg.model)
-    learned.load_state_dict(ck["model"])
+    learned.load_state_dict(unpack_attention(ck["model"]))
     run(learned, f"learned ({args.checkpoint})")
     return 0
 

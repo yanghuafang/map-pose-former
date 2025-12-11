@@ -103,9 +103,11 @@ one of them** — it was tried, and at a fixed `dim` of 128 both one and two hea
 are *slower* end to end than four. The matmul saving is real and never reaches
 the wall clock, which is the clearest evidence that this model is launch-bound
 rather than arithmetic-bound. `RESULTS.md` has the sweep.
-**`F.scaled_dot_product_attention`** in place of `nn.MultiheadAttention` with
-explicit masks would stop materialising the attention matrix, cutting both time
-and the memory that dominates this model. **CUDA graphs** are in M4's latency
+**`F.scaled_dot_product_attention`** is now what `model/attention.py` calls,
+and the padding mask broadcasts as `(B, 1, 1, M)` rather than being expanded,
+so the full score tensor need not be built. Whether the backend actually avoids
+it is **unmeasured** — SDPA falls back to the math path for some mask shapes,
+and 6.9 GiB is worth confirming rather than assuming. **CUDA graphs** are in M4's latency
 protocol but not used in training.
 
 ## Hyperparameters with a diagnosis but no measurement
@@ -132,18 +134,12 @@ protocol but not used in training.
   simulated INT8 in `quantize.py` prices the accuracy — unchanged at 8 bits —
   and says nothing about the speed.
 
-- **`nn.MultiheadAttention` blocks two of M4's three stages.** It holds 49% of
-  the student's parameters and neither pruning nor quantization can reach them.
-  Heads cannot be pruned because the module requires its internal projection
-  width to equal `embed_dim`, and dropping a head makes the two differ. Its
-  weights cannot be quantized because the input projection is a raw parameter
-  rather than a child module, and the output projection is a `Linear` subclass
-  whose `.weight` the parent reads directly, so wrapping it breaks the forward.
-  So structured pruning reaches the feed-forwards only, and INT8 shrinks the
-  weights by a third rather than three quarters. Replacing it with an explicit
-  `scaled_dot_product_attention` would unblock both *and* stop materialising
-  the attention matrix, which is wanted below for its own sake. This is now the
-  single highest-value change in the file.
+- **Head pruning is possible now and not implemented.** `model/attention.py`
+  replaced `nn.MultiheadAttention`, so the projections are four `nn.Linear` and
+  nothing structural stands in the way of dropping a head. What is missing is
+  the plan: `prune.py` scores feed-forward channels and knows nothing about
+  heads, so somebody has to decide what a head's importance is. Quantization
+  already benefits — coverage went from 49% of the student to 98%.
 - **Pruning scores by weight magnitude**, which ignores what the activations
   do. A Taylor or activation-aware criterion is the obvious next thing to try,
   and the prune/fine-tune/re-measure cycle is what would say whether it pays.

@@ -40,6 +40,7 @@ from mapposeformer.config import (
     with_overrides,
 )
 from mapposeformer.data import build_dataset
+from mapposeformer.model.attention import unpack_attention
 from mapposeformer.model.volume_head import GridParams, grid_cost
 
 _W, _H, _PAD, _TOP = 720, 540, 60, 46
@@ -192,7 +193,7 @@ def main() -> int:
         )
         cfg = ckpt["config"]
         model = MapPoseFormer(cfg.model)
-        model.load_state_dict(ckpt["model"])
+        model.load_state_dict(unpack_attention(ckpt["model"]))
         model.eval()
 
     over = parse_overrides(args.overrides)

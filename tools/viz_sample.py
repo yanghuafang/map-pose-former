@@ -40,6 +40,7 @@ from mapposeformer import geometry as G
 from mapposeformer.config import Config
 from mapposeformer.data import build_dataset
 from mapposeformer.data.classes import LandmarkClass
+from mapposeformer.model.attention import unpack_attention
 
 _W, _H, _PAD = 900, 900, 30
 
@@ -186,7 +187,7 @@ def main() -> int:
         )
         cfg = ckpt["config"]
         model = MapPoseFormer(cfg.model)
-        model.load_state_dict(ckpt["model"])
+        model.load_state_dict(unpack_attention(ckpt["model"]))
         model.eval()
 
     sample = build_dataset(cfg.data, args.split)[args.index]

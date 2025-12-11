@@ -26,6 +26,8 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+from mapposeformer.model.attention import unpack_attention
+
 _EPS = 1e-9
 
 
@@ -149,7 +151,7 @@ def load_teacher(path: str, device: str) -> torch.nn.Module:
 
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
     model = MapPoseFormer(upgrade(ckpt["config"]).model)
-    model.load_state_dict(ckpt["model"])
+    model.load_state_dict(unpack_attention(ckpt["model"]))
     return model.to(device).eval().requires_grad_(False)
 
 

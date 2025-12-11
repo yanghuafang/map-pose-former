@@ -290,17 +290,17 @@ In this order, because each stage changes what the next works with:
    noise. The model is activation-bound, so weights were never the cost.
    [RESULTS.md](RESULTS.md) has the Pareto table.
 
-   Attention heads were meant to be the other half of this and are not
-   reachable — `nn.MultiheadAttention` ties its projection width to
-   `embed_dim`. [OPEN_ITEMS.md](OPEN_ITEMS.md) has what would change that.
+   Attention heads were meant to be the other half of this. They are reachable
+   now that `model/attention.py` owns the projections, and still unpruned:
+   `prune.py` scores feed-forward channels and has no notion of a head.
 3. **Quantization of the student**: PTQ for the calibration curve, then QAT with
    `nvidia-modelopt`. Neither the pose head nor the cost surface has weights to
    quantize; `mapposeformer/quantize.py` says why that matters.
 
    `mapposeformer/quantize.py` simulates INT8 to price it in accuracy, which
-   needs no vendor runtime and runs in the test suite. It reaches 49% of the
-   student's weights; the rest is inside `nn.MultiheadAttention` and out of
-   reach, so this shrinks the weights by a third rather than three quarters.
+   needs no vendor runtime and runs in the test suite. It reaches 98% of the
+   student's weights, so this shrinks them to near a quarter rather than by a
+   third.
    **Run: accuracy is untouched at 8 bits**, 0.261 either way. The speed
    question is M4a's, because it needs integer kernels.
 

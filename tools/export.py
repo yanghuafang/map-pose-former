@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mapposeformer.config import upgrade
 from mapposeformer.data import build_dataset
+from mapposeformer.model.attention import unpack_attention
 from mapposeformer.model.model import MapPoseFormer
 from mapposeformer.prune import apply_plan
 
@@ -62,7 +63,7 @@ def load(path: str):
     model = MapPoseFormer(cfg.model)
     if ckpt.get("prune_plan"):
         apply_plan(model, ckpt["prune_plan"])
-    model.load_state_dict(ckpt["model"])
+    model.load_state_dict(unpack_attention(ckpt["model"]))
     return model.eval(), cfg
 
 

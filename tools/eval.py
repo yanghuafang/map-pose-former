@@ -26,6 +26,7 @@ from mapposeformer.config import parse_overrides, upgrade, with_overrides
 from mapposeformer.data import build_dataset
 from mapposeformer.engine import evaluate, format_report
 from mapposeformer.model import MapPoseFormer
+from mapposeformer.model.attention import unpack_attention
 
 
 def main() -> int:
@@ -46,7 +47,7 @@ def main() -> int:
     )
 
     model = MapPoseFormer(cfg.model)
-    model.load_state_dict(ckpt["model"])
+    model.load_state_dict(unpack_attention(ckpt["model"]))
     model.to(args.device).eval()
 
     dataset = build_dataset(cfg.data, args.split)

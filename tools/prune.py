@@ -25,6 +25,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mapposeformer.config import upgrade
+from mapposeformer.model.attention import unpack_attention
 from mapposeformer.model.model import MapPoseFormer
 from mapposeformer.prune import apply_plan, parameter_count, prune_model
 
@@ -46,7 +47,7 @@ def main() -> int:
     model = MapPoseFormer(upgrade(ckpt["config"]).model)
     if ckpt.get("prune_plan"):
         apply_plan(model, ckpt["prune_plan"])
-    model.load_state_dict(ckpt["model"])
+    model.load_state_dict(unpack_attention(ckpt["model"]))
 
     before, ffn_before = parameter_count(model)
     plan = prune_model(model, args.keep)

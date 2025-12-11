@@ -17,12 +17,100 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 
 # : Additive score for a masked key. Finite, for the reason ``matcher.py``
 # gives: : a row of ``-inf`` softmaxes to NaN, and NaN survives every mask
 # after it.
 _MASK_SCORE = -1e4
+
+
+class MultiheadAttention(nn.Module):
+    """Multi-head attention with its projections exposed as ``nn.Linear``.
+
+    The arithmetic is torch's. What differs is the layout. ``nn.Multihead-
+    Attention`` packs the input projection into one ``in_proj_weight``
+    *Parameter*, and both ``quantize.py`` and ``prune.py`` find their work by
+    walking the module tree for ``nn.Linear`` -- so attention was invisible to
+    both. Four Linears make it visible without changing the answer, and
+    :func:`unpack_attention` maps an existing checkpoint onto this layout, so
+    nothing retrains.
+
+    Masking is additive and finite, using this file's ``_MASK_SCORE``, so a row
+    whose keys are all padding attends uniformly instead of producing NaN.
+    """
+
+    def __init__(self, dim: int, heads: int):
+        super().__init__()
+        if dim % heads:
+            raise ValueError(f"dim {dim} is not divisible by heads {heads}")
+        self.heads, self.head_dim = heads, dim // heads
+        self.q_proj = nn.Linear(dim, dim)
+        self.k_proj = nn.Linear(dim, dim)
+        self.v_proj = nn.Linear(dim, dim)
+        self.out_proj = nn.Linear(dim, dim)
+
+    def _heads(self, x: Tensor) -> Tensor:
+        b, n, _ = x.shape
+        return x.view(b, n, self.heads, self.head_dim).transpose(1, 2)
+
+    def forward(
+        self,
+        q: Tensor,
+        k: Tensor,
+        v: Tensor,
+        key_padding_mask: Tensor | None = None,
+        attn_mask: Tensor | None = None,
+        need_weights: bool = False,
+    ) -> tuple[Tensor, None]:
+        """@return ``(output, None)``, shaped like torch's so call sites are
+        unchanged. Weights are never returned; nothing here asks for them."""
+        b, n, dim = q.shape
+        qh, kh, vh = (
+            self._heads(self.q_proj(q)),
+            self._heads(self.k_proj(k)),
+            self._heads(self.v_proj(v)),
+        )
+        bias = None
+        if attn_mask is not None:
+            bias = attn_mask.view(b, self.heads, n, -1)
+        if key_padding_mask is not None:
+            pad = key_padding_mask[:, None, None, :]
+            if bias is None:
+                # (B, 1, 1, M), which broadcasts. Materialising the full
+                # (B, heads, N, M) here would allocate the very tensor this
+                # class exists to stop allocating: at batch 64 that is 7.25 M
+                # scores a layer, and there are four of them per pass.
+                bias = torch.zeros_like(pad, dtype=qh.dtype).masked_fill(
+                    pad, _MASK_SCORE
+                )
+            else:
+                bias = bias.masked_fill(pad, _MASK_SCORE)
+        out = F.scaled_dot_product_attention(qh, kh, vh, attn_mask=bias)
+        return self.out_proj(out.transpose(1, 2).reshape(b, n, dim)), None
+
+
+def unpack_attention(state: dict[str, Tensor]) -> dict[str, Tensor]:
+    """@brief Rewrite a checkpoint's packed attention onto the split layout.
+
+    @param state A ``state_dict`` saved when attention was
+        ``nn.MultiheadAttention``.
+    @return The same weights under ``q_proj``/``k_proj``/``v_proj``. Values are
+        copied, not recomputed, so the converted model is numerically the one
+        that was trained.
+    """
+    out: dict[str, Tensor] = {}
+    for key, value in state.items():
+        if key.endswith("in_proj_weight") or key.endswith("in_proj_bias"):
+            stem = key.rsplit("in_proj_", 1)[0]
+            kind = "weight" if key.endswith("weight") else "bias"
+            third = value.shape[0] // 3
+            for i, name in enumerate(("q_proj", "k_proj", "v_proj")):
+                out[f"{stem}{name}.{kind}"] = value[i * third : (i + 1) * third]
+        else:
+            out[key] = value
+    return out
 
 
 class FeedForward(nn.Sequential):
@@ -40,7 +128,7 @@ class SelfBlock(nn.Module):
     def __init__(self, dim: int, heads: int, ffn_mult: int = 2):
         super().__init__()
         self.norm_attn = nn.LayerNorm(dim)
-        self.attn = nn.MultiheadAttention(dim, heads, batch_first=True)
+        self.attn = MultiheadAttention(dim, heads)
         self.norm_ffn = nn.LayerNorm(dim)
         self.ffn = FeedForward(dim, ffn_mult)
 
@@ -60,7 +148,7 @@ class CrossBlock(nn.Module):
         self.heads = heads
         self.norm_q = nn.LayerNorm(dim)
         self.norm_kv = nn.LayerNorm(dim)
-        self.attn = nn.MultiheadAttention(dim, heads, batch_first=True)
+        self.attn = MultiheadAttention(dim, heads)
         self.norm_ffn = nn.LayerNorm(dim)
         self.ffn = FeedForward(dim, ffn_mult)
 
@@ -85,7 +173,7 @@ class AttentionPool(nn.Module):
         super().__init__()
         self.query = nn.Parameter(torch.randn(1, 1, dim) * 0.02)
         self.norm = nn.LayerNorm(dim)
-        self.attn = nn.MultiheadAttention(dim, heads, batch_first=True)
+        self.attn = MultiheadAttention(dim, heads)
 
     def forward(self, x: Tensor, pad: Tensor) -> Tensor:
         """Returns ``(B, D)``, zero for a row with no unmasked token.
@@ -95,12 +183,10 @@ class AttentionPool(nn.Module):
         and a frame at the edge of a scene can have neither a visible map
         element nor a detection.
 
-        ``nn.MultiheadAttention`` currently returns zeros for such a row rather
-        than the NaN the null token exists to prevent elsewhere, which is the
-        answer we want -- no evidence, no summary. Written out rather than
-        relied upon, because it is a convention of one implementation and this
-        graph is meant to leave PyTorch for TensorRT, where a softmax over
-        nothing is free to do something else.
+        Such a row attends to nothing in particular, and the ``masked_fill``
+        below turns that into an explicit zero -- no evidence, no summary.
+        Stated in the code rather than left to the softmax, because this graph
+        is meant to leave PyTorch for TensorRT.
         """
         empty = pad.all(dim=1, keepdim=True)
         h = self.norm(x)

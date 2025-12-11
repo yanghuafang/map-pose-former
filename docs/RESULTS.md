@@ -365,17 +365,22 @@ latency. If parameters drove cost, it would be 11×.
 ### What that means for the milestone
 
 **Pruning is the wrong lever for this architecture.** It is not that pruning failed — it removed a third of the weights for no
-accuracy — it is that weights were not what made this model slow. The lever that
-would move latency is the one `docs/OPEN_ITEMS.md` now ranks first: replacing
-`nn.MultiheadAttention` with `scaled_dot_product_attention`, which would stop
-materialising the attention matrix.
+accuracy — it is that weights were not what made this model slow. The lever
+that would move latency is the attention matrix, not the weights;
+`model/attention.py` has since replaced `nn.MultiheadAttention` with
+`scaled_dot_product_attention` and a broadcasting mask, and whether that
+actually stops the matrix being built is still to be measured.
 
 **The INT8 row is a simulation and its latency must not be read as INT8's.**
 Quantize-dequantize adds rounding and removes no arithmetic, so 34.40 ms is the
 cost of *pretending*. What the row does say is that accuracy is untouched at 8
-bits — 0.261 either way — which is the number worth carrying into M5. It also
-reaches only 49% of the weights, because the rest are inside
-`nn.MultiheadAttention`; the same module, a third time.
+bits — 0.261 either way — which is the number worth carrying into M5.
+
+That was measured when quantization reached 49% of the weights, the rest being
+inside `nn.MultiheadAttention`. Since that module was replaced it reaches 98%,
+and the claim survives the wider net: 0.261 against 0.260, trusted 0.240
+against 0.234. So INT8 costs nothing on nearly the whole model rather than on
+half of it.
 
 **Distillation is the only stage that paid.** It is also the only one that
 changes what the model *knows* rather than how it is stored.
