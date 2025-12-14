@@ -104,6 +104,12 @@ ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 
+# --- Machine-local settings --------------------------------------------------
+# The GPU host and the checkout paths on it. One person's directory layout is
+# not a fact about this project, and committing it would hand every reader a
+# default that is wrong for them.
+/scripts/remote.env
+
 # --- Scratch ----------------------------------------------------------------
 /tmp/
 *.tmp
