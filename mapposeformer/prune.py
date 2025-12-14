@@ -16,10 +16,10 @@ express it. Replacing it with an explicit ``scaled_dot_product_attention`` would
 allow head pruning and stop materialising the attention matrix, which
 ``docs/OPEN_ITEMS.md`` already wanted for other reasons.
 
-A pruned model no longer matches the width its config implies, so the plan is
-saved beside the weights and replayed before the state dict is loaded. Without
-that a pruned checkpoint is unloadable, which would make the whole stage a
-measurement nobody can reproduce.
+A pruned model no longer matches the width its config implies, so the plan
+travels with the weights and ``checkpoint.py`` replays it on the way back in.
+Without that a pruned checkpoint is unloadable, which would make the whole
+stage a measurement nobody can reproduce.
 """
 
 from __future__ import annotations

@@ -30,11 +30,9 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from mapposeformer.checkpoint import build_model
 from mapposeformer.config import upgrade
 from mapposeformer.data import build_dataset
-from mapposeformer.model.attention import unpack_attention
-from mapposeformer.model.model import MapPoseFormer
-from mapposeformer.prune import apply_plan
 
 #: The inputs the graph takes, in the order it takes them.
 INPUTS = ("map_", "det_", "hist_")
@@ -60,10 +58,7 @@ def load(path: str):
     @param path Checkpoint. @return ``(model, config)``."""
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
     cfg = upgrade(ckpt["config"])
-    model = MapPoseFormer(cfg.model)
-    if ckpt.get("prune_plan"):
-        apply_plan(model, ckpt["prune_plan"])
-    model.load_state_dict(unpack_attention(ckpt["model"]))
+    model = build_model(ckpt, cfg.model)
     return model.eval(), cfg
 
 

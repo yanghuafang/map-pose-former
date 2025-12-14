@@ -29,12 +29,11 @@ from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from mapposeformer.checkpoint import build_model
 from mapposeformer.config import upgrade
 from mapposeformer.data import build_dataset
 from mapposeformer.engine import evaluate
-from mapposeformer.model.attention import unpack_attention
-from mapposeformer.model.model import MapPoseFormer
-from mapposeformer.prune import apply_plan, parameter_count
+from mapposeformer.prune import parameter_count
 from mapposeformer.quantize import QuantParams, calibrate, quantize
 
 
@@ -48,10 +47,7 @@ def _load(path: str, device: str, want_quant: bool, batch):
     """
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
     cfg = upgrade(ckpt["config"])
-    model = MapPoseFormer(cfg.model)
-    if ckpt.get("prune_plan"):
-        apply_plan(model, ckpt["prune_plan"])
-    model.load_state_dict(unpack_attention(ckpt["model"]))
+    model = build_model(ckpt, cfg.model)
     model = model.to(device).eval()
     if want_quant:
         quantize(model, QuantParams())

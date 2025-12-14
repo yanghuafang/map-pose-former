@@ -34,13 +34,13 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mapposeformer import geometry as G
+from mapposeformer.checkpoint import load_checkpoint
 from mapposeformer.config import (
     Config,
     parse_overrides,
     with_overrides,
 )
 from mapposeformer.data import build_dataset
-from mapposeformer.model.attention import unpack_attention
 from mapposeformer.model.volume_head import GridParams, grid_cost
 
 _W, _H, _PAD, _TOP = 720, 540, 60, 46
@@ -186,14 +186,7 @@ def main() -> int:
 
     cfg, model = Config(), None
     if args.checkpoint:
-        from mapposeformer.model import MapPoseFormer
-
-        ckpt = torch.load(
-            args.checkpoint, map_location="cpu", weights_only=False
-        )
-        cfg = ckpt["config"]
-        model = MapPoseFormer(cfg.model)
-        model.load_state_dict(unpack_attention(ckpt["model"]))
+        model, cfg = load_checkpoint(args.checkpoint)
         model.eval()
 
     over = parse_overrides(args.overrides)

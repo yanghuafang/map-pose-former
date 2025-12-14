@@ -26,8 +26,6 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-from mapposeformer.model.attention import unpack_attention
-
 _EPS = 1e-9
 
 
@@ -146,12 +144,10 @@ def load_teacher(path: str, device: str) -> torch.nn.Module:
     @return The model, in eval mode with gradients off.
     @throws ValueError If teacher and student disagree on any output shape.
     """
-    from mapposeformer.config import upgrade
-    from mapposeformer.model.model import MapPoseFormer
+    from mapposeformer.checkpoint import build_model
 
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
-    model = MapPoseFormer(upgrade(ckpt["config"]).model)
-    model.load_state_dict(unpack_attention(ckpt["model"]))
+    model = build_model(ckpt)
     return model.to(device).eval().requires_grad_(False)
 
 

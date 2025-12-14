@@ -28,11 +28,9 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mapposeformer import geometry as G
-from mapposeformer.config import parse_overrides, upgrade, with_overrides
+from mapposeformer.checkpoint import load_checkpoint
 from mapposeformer.data import build_dataset
 from mapposeformer.engine import evaluate, format_report
-from mapposeformer.model import MapPoseFormer
-from mapposeformer.model.attention import unpack_attention
 from mapposeformer.model.pose_head import ProcrustesPoseHead
 from mapposeformer.model.volume_head import VolumeHead
 
@@ -152,8 +150,7 @@ def main() -> int:
     ap.add_argument("overrides", nargs="*")
     args = ap.parse_args()
 
-    ck = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    cfg = with_overrides(upgrade(ck["config"]), parse_overrides(args.overrides))
+    learned, cfg = load_checkpoint(args.checkpoint, args.overrides)
     ds = build_dataset(cfg.data, args.split)
 
     def run(model, label):
@@ -169,8 +166,6 @@ def main() -> int:
         GeometricBaseline(cfg, args.sigma, args.iters),
         f"geometric, sigma={args.sigma}, iters={args.iters}",
     )
-    learned = MapPoseFormer(cfg.model)
-    learned.load_state_dict(unpack_attention(ck["model"]))
     run(learned, f"learned ({args.checkpoint})")
     return 0
 

@@ -22,11 +22,9 @@ from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mapposeformer.config import parse_overrides, upgrade, with_overrides
+from mapposeformer.checkpoint import load_checkpoint
 from mapposeformer.data import build_dataset
 from mapposeformer.engine import evaluate, format_report
-from mapposeformer.model import MapPoseFormer
-from mapposeformer.model.attention import unpack_attention
 
 
 def main() -> int:
@@ -41,13 +39,7 @@ def main() -> int:
     ap.add_argument("overrides", nargs="*", help="section.field=value")
     args = ap.parse_args()
 
-    ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    cfg = with_overrides(
-        upgrade(ckpt["config"]), parse_overrides(args.overrides)
-    )
-
-    model = MapPoseFormer(cfg.model)
-    model.load_state_dict(unpack_attention(ckpt["model"]))
+    model, cfg = load_checkpoint(args.checkpoint, args.overrides)
     model.to(args.device).eval()
 
     dataset = build_dataset(cfg.data, args.split)
