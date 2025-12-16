@@ -14,6 +14,7 @@ from mapposeformer.model import (
     ModelParams,
     weighted_procrustes_se2,
 )
+from mapposeformer.model.geometric import geometric_assign
 from mapposeformer.model.pose_head import ProcrustesPoseHead
 from mapposeformer.model.volume_head import GridParams, VolumeHead, grid_cost
 
@@ -417,12 +418,6 @@ def test_gradient_accumulation_matches_one_large_batch():
 def test_geometric_assignment_is_mutual_and_class_constrained():
     """The baseline matcher's contract: no pair survives that is padded, of a
     different class, or not each other's nearest."""
-    import sys
-    from pathlib import Path
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
-    from baseline_matcher import geometric_assign
-
     det = torch.tensor([[[0.0, 0.0], [10.0, 0.0], [0.0, 0.0]]])
     mp = torch.tensor([[[0.1, 0.0], [10.1, 0.0]]])
     ok_d = torch.tensor([[True, True, False]])

@@ -53,11 +53,11 @@ infer any of it from an absence.
   different chunking, geometry that bends the wrong way at range, missing pieces
   and hallucinated topology, none of which is modelled. M2b addresses this by
   running a pretrained mapper, not by training one.
-- **Closed loop is synthetic and single-backend.** M3 runs the loop, but only
-  on generated scenes and only through the Procrustes head. nuScenes has never
-  been driven through a filter, and the regression backend has not been run
-  against the same one — which is the comparison that would say whether its
-  off-distribution collapse matters when the prior is always good.
+- **Closed loop is synthetic.** M3 runs the loop, but only on generated
+  scenes: nuScenes has never been driven through a filter. The geometric
+  matcher now drives the same one, and `RESULTS.md` has what that measured; the
+  regression head still has not, which is the comparison that would say whether
+  its off-distribution collapse matters when the prior is always good.
 - **Deployment stops at the ONNX.** Compression and the runtime are measured
   (M4), but nothing here runs inside the system it was written for: the C++
   TensorRT backend that would plug into camera-map-localization, so that one

@@ -264,6 +264,46 @@ Kalman gain and the next frame pulls it back.
 tools/run_sequence.py runs/m1_base/best.pt --split test
 ```
 
+### Two backends through the same filter
+
+`engine/sequence.py` reads four keys off whatever it is handed, so the geometric
+matcher from [the M1 baseline](#m1--does-the-matcher-need-to-be-learned) drives
+the same loop over the same scenes with the same odometry, and only the backend
+differs.
+
+| | open loop | closed loop | factor |
+|---|---|---|---|
+| learned | 0.336 | **0.087** | 3.9× |
+| geometric, one pass | 1.468 | 1.366 | 1.07× |
+| geometric, ten passes | 1.349 | 0.820 | 1.65× |
+
+**The filter rescues the learned backend and barely touches the geometric one**,
+so the gap between them widens from 4.4× open loop to 15.7× closed. A filter
+averages independent errors away; it cannot touch a bias. Nearest neighbour
+picks the wrong dash, and having picked it, picks the same wrong dash on the
+next frame from a prior that has moved a few centimetres — seventy-four
+repetitions of one error, and averaging removes none of it. Iterating to ten
+passes is the only thing that helps, and it helps by removing the bias rather
+than by averaging it.
+
+**The filter's own covariance says so from the inside.** Driven by the model it
+is calibrated: NEES/dof 0.796 against a target of 0.789, no frame above 10.
+Driven by the geometric matcher it reads 1.761 with 23.1% of frames above 10.
+The filter has been shrinking its covariance every frame as though it were
+accumulating independent evidence, and it was not — which is what a biased
+measurement looks like from inside a Kalman filter, and is a diagnosis no
+single-frame score can produce.
+
+**This is the strongest form of the observability argument here.** Open loop,
+4.4× can be read as the learned model simply being more accurate. Closed loop
+that reading fails: a merely noisier backend would have been rescued, and this
+one is not.
+
+```bash
+tools/run_sequence.py runs/m1_base/best.pt --split test --backend geometric
+tools/run_sequence.py runs/m1_base/best.pt --split test --backend geometric --iters 10
+```
+
 ## M4 — distillation
 
 `configs/synth_teacher.yaml` then `configs/synth_distill.yaml`, both step-matched
