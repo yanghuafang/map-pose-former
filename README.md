@@ -195,7 +195,7 @@ survived every correction to the instrument.
 | `tools/viz_volume.py` | Draw the cost surface, in either of the two senses it has |
 | `tools/bench.py` | Where the step time goes — generator, loader and model, apart |
 | `tools/prepare_nuscenes.py` | Turn nuScenes into per-scene worlds, once, offline |
-| `tools/prune.py` | Remove feed-forward channels structurally, and say what it cost |
+| `tools/prune.py` | Remove feed-forward channels or attention heads structurally |
 | `tools/latency.py` | One forward pass at batch 1, p50 and p99, under a fixed protocol |
 | `tools/pareto.py` | Accuracy against latency, every configuration in one table |
 | `tools/plot_pareto.py` | Draw that table, so the shape of the result is visible |

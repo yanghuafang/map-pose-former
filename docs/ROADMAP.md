@@ -290,9 +290,11 @@ In this order, because each stage changes what the next works with:
    noise. The model is activation-bound, so weights were never the cost.
    [RESULTS.md](RESULTS.md) has the Pareto table.
 
-   Attention heads were meant to be the other half of this. They are reachable
-   now that `model/attention.py` owns the projections, and still unpruned:
-   `prune.py` scores feed-forward channels and has no notion of a head.
+   Attention heads are the other half, and `prune.py` scores and slices them
+   now. Same story: two heads in four come off for 0.260 against the 0.264 they
+   started from, and buy 3.5% of latency. A pruned head is a narrower
+   projection, so it removes weights like everything else here, and M4's verdict
+   stands.
 3. **Quantization of the student**: PTQ for the calibration curve, then QAT with
    `nvidia-modelopt`. Neither the pose head nor the cost surface has weights to
    quantize; `mapposeformer/quantize.py` says why that matters.

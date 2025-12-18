@@ -171,12 +171,12 @@ class Trainer:
 
         A pruned checkpoint no longer matches the width its config implies, so
         its plan is replayed before the state dict is loaded. Without that the
-        load fails on every feed-forward, which is a confusing way to discover
+        load fails on every pruned module, which is a confusing way to discover
         that a file was pruned.
 
         @param path Checkpoint to load.
         """
-        from mapposeformer.prune import apply_plan
+        from mapposeformer.prune import apply_plan, split_plan
 
         ckpt = torch.load(path, map_location="cpu", weights_only=False)
         upgrade(ckpt.get("config"))
@@ -184,8 +184,15 @@ class Trainer:
         if plan:
             apply_plan(self.model, plan)
             self.prune_plan = plan
-            width = min(plan.values())
-            print(f"pruned init: {len(plan)} feed-forwards to {width}")
+            ffn, attn = split_plan(self.model, plan)
+            parts = []
+            if ffn:
+                parts.append(f"{len(ffn)} feed-forwards to {min(ffn.values())}")
+            if attn:
+                parts.append(
+                    f"{len(attn)} attentions to {min(attn.values())} heads"
+                )
+            print(f"pruned init: {', '.join(parts)}")
         self.model.load_state_dict(unpack_attention(ckpt["model"]))
         self.model.to(self.device)
         print(f"initialised from {path}")

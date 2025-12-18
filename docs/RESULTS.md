@@ -425,6 +425,95 @@ half of it.
 **Distillation is the only stage that paid.** It is also the only one that
 changes what the model *knows* rather than how it is stored.
 
+### Heads and channels break the model in opposite directions
+
+The rows above are fine-tuned, so they say what pruning costs *after* recovery.
+This says what it costs before: one checkpoint, one evaluator, no fine-tune, so
+the two prunings are comparable to each other.
+
+| | params | trans | recall @25cm | trusted | NEES/dof | above 10 |
+|---|---|---|---|---|---|---|
+| nothing pruned | 2.28 M | **0.336** | **96.0%** | 99.2% | 0.786 | 0.42% |
+| 3 of 4 heads | 2.00 M | 0.431 | 93.9% | 99.6% | 0.690 | 0.73% |
+| 2 of 4 heads | 1.72 M | 0.473 | 89.3% | 79.8% | 0.032 | 0.65% |
+| 1 of 4 heads | 1.44 M | 0.824 | 70.6% | 54.7% | 0.020 | 0.33% |
+| half the channels | 1.76 M | 0.844 | 27.8% | 94.7% | 12.276 | **56.05%** |
+| a quarter of them | 1.49 M | 3.510 | 4.1% | 0.1% | 99.883 | **89.48%** |
+
+**At matched damage, heads are the cheaper thing to remove.** 24.5% of the
+parameters taken as heads costs 0.473; 23.1% taken as channels costs 0.844, and
+recall falls from 89.3% to 27.8%. Channel pruning appears in the table above at
+0.267 only because of the fine-tune: those rows start from the distilled student
+and are given 9 250 steps to recover.
+
+**The two failures are not the same kind.** Pruned of heads the model becomes
+*pessimistic* — NEES/dof falls to 0.032, and the trust head begins abstaining,
+refusing a fifth of the split at two heads and nearly half at one. Pruned of
+channels it becomes *overconfident*: NEES/dof 12.3 with 56% of frames above 10,
+while still calling 94.7% of them trustworthy. One damaged model reports that it
+does not know; the other keeps asserting.
+
+The half-channel row is the one worth looking at twice, because it is the only
+configuration here that is both badly wrong and sure of itself — which is
+exactly the failure
+[the covariance exists to prevent](#the-covariance-is-honest-almost-everywhere-and-catastrophic-on-04).
+The quarter-channel row is not a second example of it: that model is broken
+enough that the *mass* gate refuses 99.9% of frames, which is a different
+mechanism catching it for a different reason.
+
+**The fine-tune erases the difference.** The table above is the raw drop. Run
+through M4's protocol instead — prune the *distilled* student, then 9 250 steps
+at a third of the learning rate — and both settings come back:
+
+| pruned from the distilled student | params | before | after |
+|---|---|---|---|
+| *nothing* | *2.28 M* | — | *0.264* |
+| 3 of 4 heads | 2.00 M | 0.405 | **0.266** |
+| 2 of 4 heads | 1.72 M | 0.949 | **0.260** |
+
+So the gentleness above belongs to the *un-recovered* model, not to the pruning.
+Given a budget to recover, two heads in four come off for nothing: 24.5% of the
+parameters, 0.260 against the 0.264 it started from, recall at 95.6% and the
+covariance still calibrated at 0.767. That is the verdict M4 reached for
+channels, reached again by the other route — and it is why the raw-drop table is
+worth reading as a description of failure modes rather than as a ranking.
+
+**"Fewer heads" here means narrower, not fewer patterns.** `head_dim` stays 32,
+so dropping two heads narrows every q/k/v projection from 128 to 64. The
+step-matched sweep in [OPEN_ITEMS.md](OPEN_ITEMS.md) holds width fixed instead
+and finds the head *count* nearly free — 4, 2 and 1 head over 128 dimensions
+give 1.108, 1.106 and 1.138 at 2 000 steps. So this measures what attention
+width is worth, not how many attention patterns the model needs.
+
+**Latency, on an idle card**, from `tools/latency.py`: batch 1, CUDA graphs,
+200 warmup and 1000 measured iterations. That is *not* the protocol of the
+Pareto table above, which times eagerly through `tools/pareto.py` — its absolute
+numbers are around three times these, and the two tables must not be read
+against each other.
+
+| | params | p50 | p99 |
+|---|---|---|---|
+| nothing pruned | 2.28 M | 7.623 ms | 7.677 ms |
+| 3 of 4 heads | 2.00 M | 7.488 ms | 7.504 ms |
+| 2 of 4 heads | 1.72 M | 7.358 ms | 7.371 ms |
+| 1 of 4 heads | 1.44 M | 7.184 ms | 7.228 ms |
+| half the channels | 1.76 M | 7.395 ms | 7.506 ms |
+
+**It moves latency, and barely.** A quarter of the parameters buys 3.5%, and at
+matched parameter count heads are indistinguishable from channels — 1.72 M of
+heads at 7.358 ms against 1.76 M of channels at 7.395 ms. The expectation going
+in was that heads would differ, because they remove attention work rather than
+weights. They do not, and the paragraph above says why: `head_dim` is fixed, so
+a pruned head *is* a narrower projection, which is weights. M4's conclusion
+survives this intact: to move latency in this model, something has to remove
+activations, and neither pruning does.
+
+```bash
+tools/prune.py runs/m1_base/best.pt --keep-heads 0.5 --out runs/_sweep/h.pt
+tools/eval.py runs/_sweep/h.pt --split test
+scripts/m4.sh --keep-heads 0.5   # the same, with M4's fine-tune budget
+```
+
 ## M5 — TensorRT, and what M4 was really measuring
 
 The distilled student, exported to ONNX and compiled to a strongly typed

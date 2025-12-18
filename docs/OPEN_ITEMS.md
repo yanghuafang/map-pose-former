@@ -134,12 +134,6 @@ protocol but not used in training.
   simulated INT8 in `quantize.py` prices the accuracy — unchanged at 8 bits —
   and says nothing about the speed.
 
-- **Head pruning is possible now and not implemented.** `model/attention.py`
-  replaced `nn.MultiheadAttention`, so the projections are four `nn.Linear` and
-  nothing structural stands in the way of dropping a head. What is missing is
-  the plan: `prune.py` scores feed-forward channels and knows nothing about
-  heads, so somebody has to decide what a head's importance is. Quantization
-  already benefits — coverage went from 49% of the student to 98%.
 - **Pruning scores by weight magnitude**, which ignores what the activations
   do. A Taylor or activation-aware criterion is the obvious next thing to try,
   and the prune/fine-tune/re-measure cycle is what would say whether it pays.

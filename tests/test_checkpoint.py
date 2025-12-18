@@ -33,7 +33,7 @@ def _write(tmp_path, model, plan=None):
 def test_a_pruned_checkpoint_loads_and_answers_the_same(tmp_path):
     torch.manual_seed(0)
     model = MapPoseFormer(Config().model)
-    plan = prune_model(model, keep_frac=0.5)
+    plan = prune_model(model, keep_frac=0.5, head_frac=0.5)
     model.eval()
     with torch.no_grad():
         want = model(_batch(2))["delta"]

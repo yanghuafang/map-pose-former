@@ -37,6 +37,10 @@ class MultiheadAttention(nn.Module):
     :func:`unpack_attention` maps an existing checkpoint onto this layout, so
     nothing retrains.
 
+    The projections are also independently *sized*, which ``prune.py`` needs:
+    ``nn.MultiheadAttention`` requires its internal width to equal
+    ``embed_dim``, and dropping a head makes those differ.
+
     Masking is additive and finite, using this file's ``_MASK_SCORE``, so a row
     whose keys are all padding attends uniformly instead of producing NaN.
     """
@@ -66,7 +70,7 @@ class MultiheadAttention(nn.Module):
     ) -> tuple[Tensor, None]:
         """@return ``(output, None)``, shaped like torch's so call sites are
         unchanged. Weights are never returned; nothing here asks for them."""
-        b, n, dim = q.shape
+        b, n, _ = q.shape
         qh, kh, vh = (
             self._heads(self.q_proj(q)),
             self._heads(self.k_proj(k)),
@@ -88,7 +92,10 @@ class MultiheadAttention(nn.Module):
             else:
                 bias = bias.masked_fill(pad, _MASK_SCORE)
         out = F.scaled_dot_product_attention(qh, kh, vh, attn_mask=bias)
-        return self.out_proj(out.transpose(1, 2).reshape(b, n, dim)), None
+        # ``heads * head_dim``, not the input width: pruning drops heads and
+        # leaves ``head_dim`` alone, so the two stop being equal.
+        width = self.heads * self.head_dim
+        return self.out_proj(out.transpose(1, 2).reshape(b, n, width)), None
 
 
 def unpack_attention(state: dict[str, Tensor]) -> dict[str, Tensor]:

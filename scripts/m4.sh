@@ -2,8 +2,9 @@
 
 # m4.sh -- the compression milestone, end to end, on the training box.
 #
-#   ./scripts/m4.sh              # wait for the GPU, then run every stage
-#   ./scripts/m4.sh --keep 0.5   # one pruning fraction instead of three
+#   ./scripts/m4.sh                    # wait for the GPU, then every stage
+#   ./scripts/m4.sh --keep 0.5         # one channel fraction instead of three
+#   ./scripts/m4.sh --keep-heads 0.5   # prune heads instead of channels
 #
 # Run after a teacher and a distilled student exist. It waits for any training
 # already on the box to finish rather than competing with it -- three runs
@@ -20,8 +21,15 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # verification job. Say what training actually needs rather than accepting it.
 export MPF_GPU_FREE_MIB="${MPF_GPU_FREE_MIB:-8200}"
 
-KEEPS=(0.75 0.5 0.25)
-[[ "${1:-}" == "--keep" ]] && KEEPS=("$2")
+# What to prune, as `flag:fraction` pairs. Channels by default; heads take the
+# same fine-tune budget, so the two prunings can be read against each other.
+PLAN=(keep:0.75 keep:0.5 keep:0.25)
+case "${1:-}" in
+  --keep)       PLAN=("keep:$2") ;;
+  --keep-heads) PLAN=("keep-heads:$2") ;;
+  "")           ;;
+  *) echo "unknown option $1" >&2; exit 2 ;;
+esac
 
 # A quarter of the 37 000 steps the student needed, which is the fine-tune
 # budget docs/ROADMAP.md costs the milestone at. At a third of the learning
@@ -60,19 +68,23 @@ say "pruning from ${base}"
 rows=(teacher=runs/teacher/best.pt student=runs/m1_base/best.pt)
 [[ -f runs/distilled/best.pt ]] && rows+=(distilled=runs/distilled/best.pt)
 
-for keep in "${KEEPS[@]}"; do
-  tag="p${keep/0./}"
-  say "prune to ${keep}, then fine-tune ${FT_STEPS} steps"
-  python tools/prune.py "${base}" --keep "${keep}" --out "runs/${tag}/init.pt"
+for entry in "${PLAN[@]}"; do
+  flag="${entry%%:*}"; frac="${entry#*:}"
+  if [ "${flag}" = keep ]; then tag="p${frac/0./}"; label="pruned"
+  else tag="h${frac/0./}"; label="heads"; fi
+  say "prune --${flag} ${frac}, then fine-tune ${FT_STEPS} steps"
+  python tools/prune.py "${base}" "--${flag}" "${frac}" \
+    --out "runs/${tag}/init.pt"
   python tools/train.py --config configs/synth_base.yaml \
     "train.init_from=runs/${tag}/init.pt" "train.max_steps=${FT_STEPS}" \
     "train.lr=${FT_LR}" "train.out_dir=runs/${tag}" 2>&1 | tail -2
-  rows+=("pruned@${keep}=runs/${tag}/best.pt")
+  rows+=("${label}@${frac}=runs/${tag}/best.pt")
+  smallest="${tag}"
 done
 
 # INT8 on the smallest survivor: the row that says whether quantization costs
 # anything once the model has already been made small.
-last="${KEEPS[-1]}"; rows+=("pruned@${last}+int8=runs/p${last/0./}/best.pt:quantize")
+rows+=("${rows[-1]%%=*}+int8=runs/${smallest}/best.pt:quantize")
 
 say "the table"
 python tools/pareto.py "${rows[@]}" --split test | tee runs/m4_table.md

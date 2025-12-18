@@ -21,6 +21,7 @@ import torch
 from mapposeformer.config import Config
 from mapposeformer.data import SyntheticDataset
 from mapposeformer.model import MapPoseFormer
+from mapposeformer.prune import prune_model
 
 INPUTS = ("map_", "det_", "hist_")
 
@@ -46,7 +47,7 @@ def _have(module: str) -> bool:
     return importlib.util.find_spec(module) is not None
 
 
-def _wrapped():
+def _wrapped(head_frac: float = 1.0):
     # Seeded: the tolerance below is absolute, and unseeded weights change the
     # scale of the outputs from run to run.
     torch.manual_seed(0)
@@ -54,13 +55,23 @@ def _wrapped():
     sample = SyntheticDataset(cfg.data, "test")[11]
     batch = {k: v.unsqueeze(0) for k, v in sample.items()}
     keys = [k for k in batch if k.startswith(INPUTS)]
-    model = MapPoseFormer(cfg.model).eval()
-    return _Positional(model, keys), tuple(batch[k] for k in keys)
+    model = MapPoseFormer(cfg.model)
+    if head_frac < 1.0:
+        prune_model(model, keep_frac=1.0, head_frac=head_frac)
+    return _Positional(model.eval(), keys), tuple(batch[k] for k in keys)
 
 
 def test_the_graph_is_capturable():
     """``torch.export`` needs no extra dependency, so this always runs."""
     wrapped, args = _wrapped()
+    assert torch.export.export(wrapped, args) is not None
+
+
+def test_a_head_pruned_graph_is_capturable():
+    """Pruning narrows attention below the model width, so the reshape after
+    the softmax stops being ``dim`` and starts being ``heads * head_dim``. A
+    constant baked in there exports fine and is wrong."""
+    wrapped, args = _wrapped(head_frac=0.5)
     assert torch.export.export(wrapped, args) is not None
 
 
