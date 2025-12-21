@@ -3,6 +3,9 @@
 | | |
 |---|---|
 | [ROADMAP.md](ROADMAP.md) | The design, the milestones, and what each has to prove |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How the network is built, and which part of it learns |
+| [DATASET.md](DATASET.md) | What the data contains and the ablations it exists for |
+| [RESULTS.md](RESULTS.md) | Every number that has been measured, and on what |
 
 
 `scripts/docs.sh` generates the API reference from the docstrings.

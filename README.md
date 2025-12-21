@@ -48,3 +48,15 @@ of learning to match.
 `delta` is the whole task. The prior is wrong by 1.5 m along track, 0.6 m
 across and 1° of heading; recovering that is what is being learned.
 
+## Getting started
+
+```bash
+./scripts/setup.sh                              # conda environment
+./scripts/ci.sh                                 # lint and tests
+tools/viz_sample.py                             # draw one frame of the task
+tools/train.py --config configs/synth_base.yaml # the reference run
+tools/eval.py runs/base/best.pt --split test    # score it
+```
+
+`docs/DATASET.md` describes what a sample contains and the ablations it exists
+for. `docs/ROADMAP.md` is the plan and the reasoning behind it.
