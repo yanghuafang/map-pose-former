@@ -12,7 +12,9 @@
 
 Read them in that order. **Read `OPEN_ITEMS.md` before trusting a number** —
 every table in `RESULTS.md` is one run of one configuration, open loop, and
-`OPEN_ITEMS.md` is where that is said plainly.
+`OPEN_ITEMS.md` is where that is said plainly. `RESULTS.md`'s head-count sweep
+puts a number on what that costs: three runs of the same model, one flag apart,
+span 48% non-monotonically. Differences smaller than that are not separated.
 
 `scripts/docs.sh` generates the API reference from the docstrings.
 

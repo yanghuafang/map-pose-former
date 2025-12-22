@@ -480,10 +480,10 @@ worth reading as a description of failure modes rather than as a ranking.
 
 **"Fewer heads" here means narrower, not fewer patterns.** `head_dim` stays 32,
 so dropping two heads narrows every q/k/v projection from 128 to 64. The
-step-matched sweep in [OPEN_ITEMS.md](OPEN_ITEMS.md) holds width fixed instead
-and finds the head *count* nearly free — 4, 2 and 1 head over 128 dimensions
-give 1.108, 1.106 and 1.138 at 2 000 steps. So this measures what attention
-width is worth, not how many attention patterns the model needs.
+converged sweep that holds width fixed and varies the head count instead
+[does not separate its arms at all](#m1--how-many-attention-heads-and-what-one-seed-can-settle).
+So this measures what attention width is worth, and nothing about how many
+attention patterns the model needs.
 
 **Latency, on an idle card**, from `tools/latency.py`: batch 1, CUDA graphs,
 200 warmup and 1000 measured iterations. That is *not* the protocol of the
@@ -789,6 +789,49 @@ and the pruned variants, and one seed does not buy that.
 ```bash
 tools/train.py --config configs/synth_base.yaml model.refine_iters=1 \
     train.out_dir=runs/refine1
+```
+
+## M1 — how many attention heads, and what one seed can settle
+
+`dim` stays 128, so fewer heads means *wider* heads at an identical parameter
+count — the opposite of what [head pruning](#heads-and-channels-break-the-model-in-opposite-directions)
+does, which holds `head_dim` at 32 and narrows the projections. Three converged
+runs, one flag apart.
+
+| heads | `head_dim` | open loop | closed loop | p50 latency |
+|---|---|---|---|---|
+| 4 | 32 | 0.336 | **0.087** | **7.632 ms** |
+| 2 | 64 | 0.366 | 0.093 | 7.972 ms |
+| 1 | 128 | **0.247** | 0.089 | 8.444 ms |
+
+**Latency answers cleanly: fewer, wider heads is slower**, by 4.5% and 10.6%,
+with p50 and p99 inside 0.01 ms of each other. `head_dim = 32` is too small to
+keep a tensor core fed, and widening it does not help — at batch 1 this model is
+launch-bound, so the matmul saving never reaches the wall clock. That retires a
+claim this repository carried in a config comment for months.
+
+**Accuracy answers nothing, and that is the result worth having.** 4 → 2 → 1
+gives 0.336, 0.366, 0.247: non-monotonic, spanning 48% of the smallest value,
+one seed per arm. No head-count effect has that shape. What the sweep measures
+is the seed-to-seed spread of this training setup, and that spread is wider than
+almost every architectural difference reported in this file.
+
+The step-matched sweep at 2 000 steps put the same three arms within 0.3% of
+each other, in a different order again. Neither is measuring head count.
+
+**So read every table in this file with a band around it.** Each is one run per
+arm. A few percent between two configurations — the refinement pass, the
+head rematch, whether a mechanism pays — sits inside the band this sweep just
+measured, and should be read as "not separated" rather than as a ranking. What
+survives it are the large effects: the learned matcher against the geometric one
+(4.4×), closed loop against open (3.9×), distillation (21%), and the failure
+modes, which differ in kind rather than in degree.
+
+```bash
+tools/train.py --config configs/synth_base.yaml model.num_heads=2 \
+    train.out_dir=runs/nh2
+tools/train.py --config configs/synth_base.yaml model.num_heads=1 \
+    train.out_dir=runs/nh1
 ```
 
 ## Identities, each with a test
