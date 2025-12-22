@@ -104,6 +104,273 @@ re-associated surface remains the principled fix: it measures whether the pose
 could be elsewhere and look as good, which is exactly what these frames are.
 Expensive, bounded by a top-k restriction, and unwritten.
 
+## M1 — does the matcher need to be learned?
+
+Every ablation here varies something *inside* the learned matcher: which
+classes it sees, which head reads it, how many passes it takes. None asks
+whether it needs to be learned. `tools/baseline_matcher.py` asks. Same anchored
+point sets, same closed-form pose head, same cost surface, same evaluator, with
+the assignment produced by mutual nearest neighbour under a Gaussian kernel and
+nothing trained.
+
+| | trans | recall @ 0.25 m, 0.5° | of the prior's error removed |
+|---|---|---|---|
+| *the prior* | *1.611* | *1.3%* | — |
+| geometric, one pass | 1.468 | 10.1% | 9% |
+| geometric, two passes | 1.433 | 15.3% | 11% |
+| geometric, five passes | 1.379 | 24.5% | 14% |
+| geometric, ten passes | 1.349 | 29.0% | 16% |
+| **learned** | **0.336** | **96.0%** | **79%** |
+
+Iterating the baseline is the fair comparison: the model re-matches after moving
+detections, so a one-shot classical matcher would be losing to ICP rather than
+to a transformer. Given ten passes against the model's two it closes almost
+none of the gap.
+
+**Nearest neighbour cannot resolve this association, and the reason is the
+observability problem this whole project is built on.** With 1.5 m of
+along-track prior error and lane dashes every few metres, the nearest map point
+to a detection is routinely the wrong one -- the next dash along, or the
+parallel lane's. Proximity is ambiguous exactly where the evidence is weakest.
+What the trunk supplies is context: *which* of four parallel lines this is,
+which is what the self-attention was put there for.
+
+**The covariance is most of the way there without any learning.** The baseline
+reports the raw surface with the learned scale zeroed, and its NEES/dof median
+is 0.465 against a target of 0.789 -- pessimistic by a factor under two, not
+wrong by orders of magnitude. The surface construction supplies the shape of
+the uncertainty and the learned scale supplies the rest. The two rows are not
+scoring the same poses, so this is a weaker claim than the table, but it says
+the calibration is not something training invents from nothing.
+
+```bash
+tools/baseline_matcher.py --split test --iters 10
+```
+
+## M1 — the observability ablation
+
+One checkpoint, evaluated under less evidence. Only what the model may see
+differs, so nothing here is a training artefact.
+
+| evidence kept | trans | long | lat | yaw |
+|---|---|---|---|---|
+| everything | **0.336** | **0.322** | 0.095 | 0.209° |
+| no perpendicular `[0,1,4,5]` | 0.402 | 0.389 | 0.100 | 0.222° |
+| **nuScenes' classes as then assumed** `[0,1,2,3]` | 1.061 | 1.057 | 0.100 | 0.273° |
+| lane geometry only `[0,1]` | 1.371 | 1.367 | 0.104 | 0.315° |
+| *(the prior, for scale)* | *1.611* | *1.497* | *0.596* | *0.993°* |
+| no lane geometry `[2,3,4,5]` | 11.415 | 9.997 | 5.510 | 27.780° |
+
+**Lane geometry still cannot see along track.** Restricted to dividers and
+boundaries, longitudinal RMSE is 1.367 m against a prior of 1.497 — essentially
+nothing recovered — while lateral falls from 0.596 to 0.104, an 83% recovery
+from the same evidence in the same frames. The asymmetry is the whole table, and
+it is the one conclusion that the clutter correction left untouched.
+
+**This row stands in for nuScenes with the wrong classes, and the number is
+retained rather than corrected.** It assumes stop lines and no point landmarks;
+reading the map showed the opposite — the stop-line annotation is an area with
+no bar direction, and there are 307 traffic lights. The real proxy is
+`[0,1,2,5]`. What the row still shows is the *mechanism*: removing point
+landmarks costs longitudinal error and leaves lateral alone.
+
+Taken at face value it says nuScenes' class set costs 3.3× longitudinal, not
+the 2.3× M0 measured.
+The gap widened because the full-evidence number improved and the restricted one
+did not, which is what it means for poles and signs to be carrying the
+along-track information. **M2 should expect this**, and it is a sharper
+prediction than the one it replaces.
+
+**The `[2,3,4,5]` catastrophe is smaller and still a catastrophe**: 11.4 m
+against M0's 14.2 m. The robust solve helped and did not fix it.
+
+## M1 — do the mechanisms pay?
+
+Same checkpoint, one mechanism disabled at evaluation.
+
+| | trans | long | lat | yaw |
+|---|---|---|---|---|
+| baseline | 0.336 | 0.322 | 0.095 | 0.209° |
+| no dashed stripes | 0.339 | 0.328 | **0.085** | **0.169°** |
+| one refinement pass | **0.316** | **0.300** | 0.097 | 0.224° |
+| plain solve, no IRLS or gate | 0.358 | 0.301 | 0.194 | 0.495° |
+
+**The dashed-stripe result did not survive re-measurement.** It was 16% of
+longitudinal error, 0.293 against 0.340; it is now 1.9%, 0.322 against 0.328.
+The arm barely moved — the baseline did, because the corrected clutter rule made
+along-track harder for everything, and the gap closed from the other side. What
+remains is the *sign*: removing the stripes still costs longitudinal and still
+improves lateral and heading, which is the signature of a feature that
+constrains one axis. What is gone is the claim that it is worth much.
+
+That the effect shrinks when clutter concentrates on lane geometry is at least
+consistent: a stripe end is a lane-class feature, and it competes with lane-class
+clutter for the matcher's attention.
+
+**The second refinement pass is now a small loss, not a wash.** One pass scores
+0.316 against two at 0.336 — 6% better for half the step time. It was 0.309
+against 0.308 before. The caveat stands: this model was *trained* with two
+passes, so it measures inference, not whether training with one would have been
+as good. But the direction has changed from "buys nothing" to "costs something",
+and the training-time ablation is now worth the hour it takes.
+
+**The robust solve earns its place**, and this is unchanged. Turning off
+reweighting and the abstention gate doubles lateral error (0.095 → 0.194) and
+more than doubles heading (0.209° → 0.495°). Longitudinal is marginally *better*
+without it, which fits: robustness trades a little accuracy on easy frames for
+much more on hard ones.
+
+## M1 — the step-matched A/B
+
+Two runs stopped at 2 000 steps rather than at equal wall clock: temporal fusion
+changes the input width, so equal time would hand the shorter model more
+training and the comparison would measure throughput instead of the mechanism.
+
+| arm | val trans RMSE | ms/step |
+|---|---|---|
+| the model | **1.107** | 307 |
+| no history | 1.239 | 305 |
+| *(the prior, for scale)* | *1.67* | — |
+
+**History is worth 10.7% of translation at 2 000 steps**, and the step time does
+not move — 305 ms against 307. That is not evidence it is free: `tools/bench.py`
+reports the loader as the limit on this box, so a model-side cost of two thirds
+of the detection tokens is hidden underneath it.
+
+What 2 000 steps cannot say is what history is worth at convergence; M0 needed
+37 000. The converged tables above are that measurement.
+
+```bash
+tools/train.py --config configs/synth_base.yaml train.max_steps=2000
+tools/train.py --config configs/ablate_no_history.yaml train.max_steps=2000
+```
+
+## M1 — the head rematch
+
+The robust solve against the `tanh`-bounded regression baseline that beat its
+predecessor seven to one. Both trained to convergence, test split.
+
+| | Procrustes | Regression |
+|---|---|---|
+| baseline trans | 0.336 | **0.248** |
+| baseline yaw | **0.209°** | 0.430° |
+| lane geometry only, trans | 1.371 | **0.971** |
+| no lane geometry, trans | 11.415 | **2.381** |
+| no lane geometry, yaw | 27.780° | **1.616°** |
+
+**The closed-form head still loses on translation, and still loses badly off
+distribution.** Robustness narrowed the out-of-distribution gap from 7× to 4.6×
+and nothing more, and the in-distribution gap widened to 35% under the corrected
+clutter rule — the regression head is less disturbed by clutter, which is what a
+bounded estimator over a pooled feature would be. What the closed form does win is **heading** — 0.211° against
+0.430°, a factor of two, and that holds in distribution where most frames live.
+
+So the split is cleaner than last time rather than resolved: solving the
+geometry gives better rotation and worse translation, and a bounded regressor
+degrades far more gracefully when the evidence is wrong. The honest reading is
+that neither is dominant, and the parameter-free head is justified by rotation
+accuracy, interpretability and quantization behaviour rather than by RMSE.
+
+## M1 — one refinement pass, not two
+
+`refine_iters` runs the trunk again over detections moved by the first pass's
+answer: a full forward, no parameters. The default was two.
+[OPEN_ITEMS.md](OPEN_ITEMS.md) recorded that evaluating the two-pass checkpoint
+at one pass scored better -- 0.316 against 0.336 -- and that this was not the
+same as training with one. It is not, and the gap runs both ways.
+
+**Evaluating at a pass count you did not train for is catastrophic, and open
+loop cannot see it:**
+
+| the two-pass checkpoint, evaluated at | trans | NEES/dof median | closed loop |
+|---|---|---|---|
+| two passes, as trained | 0.336 | **0.786** | **0.087** |
+| one pass | **0.316** | 0.146 | 3.182 |
+
+Six percent better on RMSE and thirty-six times worse in the loop. The
+covariance is what breaks. A single pass leaves a broader surface, so the
+reported variance is five times too wide, the filter under-weights every
+correction it is given, and 3.3% of scenes diverge with the trust head refusing
+in runs of seventy-four frames. RMSE alone reports none of that.
+
+**Trained with one pass, one pass wins outright.** Same seed, same data, the
+same 2 283 397 parameters -- refinement adds none -- and one flag apart:
+
+| | two passes | one pass |
+|---|---|---|
+| best val trans | 0.3048, step 33 300 | **0.2123, step 9 250** |
+| test trans | 0.336 | **0.221** |
+| test, trusted frames | 0.297 | **0.186** |
+| ANEES *(1.0 is honest)* | 4.783 | **1.820** |
+| NEES/dof median *(0.789 is calibrated)* | **0.786** | 0.744 |
+| frames above NEES/dof 10 | 0.42% | **0.36%** |
+| closed loop trans | 0.087 | **0.083** |
+| closed loop NEES/dof median | 0.795 | **0.788** |
+| frames per second | 173 | **327** |
+
+A third less error, a mean four times better behaved, a smaller tail, and 1.9x
+the throughput. It also reaches its best 3.6x sooner in steps, so the compute
+spent to get there is roughly seven times less.
+
+**Why two ever looked right** is the first table: a checkpoint trained for two
+is plainly worse at one, and that is the reading the earlier note took. The
+pass count is not free to change after training, which is what made a true
+statement about RMSE point the wrong way.
+
+**What this does not settle.** One seed. And both runs end past their best --
+one pass by 19%, two by 10% -- so 37 000 steps is the wrong budget for the
+faster configuration and a shorter schedule may beat both. The default is left
+at two because moving it means retraining the teacher, the distilled student
+and the pruned variants, and one seed does not buy that.
+
+```bash
+tools/train.py --config configs/synth_base.yaml model.refine_iters=1 \
+    train.out_dir=runs/refine1
+```
+
+## M1 — how many attention heads, and what one seed can settle
+
+`dim` stays 128, so fewer heads means *wider* heads at an identical parameter
+count — the opposite of what [head pruning](#heads-and-channels-break-the-model-in-opposite-directions)
+does, which holds `head_dim` at 32 and narrows the projections. Three converged
+runs, one flag apart.
+
+| heads | `head_dim` | open loop | closed loop | p50 latency |
+|---|---|---|---|---|
+| 4 | 32 | 0.336 | **0.087** | **7.632 ms** |
+| 2 | 64 | 0.366 | 0.093 | 7.972 ms |
+| 1 | 128 | **0.247** | 0.089 | 8.444 ms |
+
+**Latency answers cleanly: fewer, wider heads is slower**, by 4.5% and 10.6%,
+with p50 and p99 inside 0.01 ms of each other. `head_dim = 32` is too small to
+keep a tensor core fed, and widening it does not help — at batch 1 this model is
+launch-bound, so the matmul saving never reaches the wall clock. That retires a
+claim this repository carried in a config comment for months.
+
+**Accuracy answers nothing, and that is the result worth having.** 4 → 2 → 1
+gives 0.336, 0.366, 0.247: non-monotonic, spanning 48% of the smallest value,
+one seed per arm. No head-count effect has that shape. What the sweep measures
+is the seed-to-seed spread of this training setup, and that spread is wider than
+almost every architectural difference reported in this file.
+
+The step-matched sweep at 2 000 steps put the same three arms within 0.3% of
+each other, in a different order again. Neither is measuring head count.
+
+**So read every table in this file with a band around it.** Each is one run per
+arm. A few percent between two configurations — the refinement pass, the
+head rematch, whether a mechanism pays — sits inside the band this sweep just
+measured, and should be read as "not separated" rather than as a ranking. What
+survives it are the large effects: the learned matcher against the geometric one
+(4.4×), closed loop against open (3.9×), distillation (21%), and the failure
+modes, which differ in kind rather than in degree.
+
+```bash
+tools/train.py --config configs/synth_base.yaml model.num_heads=2 \
+    train.out_dir=runs/nh2
+tools/train.py --config configs/synth_base.yaml model.num_heads=1 \
+    train.out_dir=runs/nh1
+```
+
 ## M2a — the first real map
 
 `configs/nuscenes.yaml`, 12 000 steps. Test split: 59 scenes on ground the
@@ -566,273 +833,6 @@ export surprise M1 pulled the smoke test forward to avoid.
 INT8 needs the graph to carry quantize/dequantize nodes, which is
 `nvidia-modelopt`'s job — TensorRT 11 removed the calibrator API this project's
 roadmap had planned around. [OPEN_ITEMS.md](OPEN_ITEMS.md) has both.
-
-## M1 — the observability ablation
-
-One checkpoint, evaluated under less evidence. Only what the model may see
-differs, so nothing here is a training artefact.
-
-| evidence kept | trans | long | lat | yaw |
-|---|---|---|---|---|
-| everything | **0.336** | **0.322** | 0.095 | 0.209° |
-| no perpendicular `[0,1,4,5]` | 0.402 | 0.389 | 0.100 | 0.222° |
-| **nuScenes' classes as then assumed** `[0,1,2,3]` | 1.061 | 1.057 | 0.100 | 0.273° |
-| lane geometry only `[0,1]` | 1.371 | 1.367 | 0.104 | 0.315° |
-| *(the prior, for scale)* | *1.611* | *1.497* | *0.596* | *0.993°* |
-| no lane geometry `[2,3,4,5]` | 11.415 | 9.997 | 5.510 | 27.780° |
-
-**Lane geometry still cannot see along track.** Restricted to dividers and
-boundaries, longitudinal RMSE is 1.367 m against a prior of 1.497 — essentially
-nothing recovered — while lateral falls from 0.596 to 0.104, an 83% recovery
-from the same evidence in the same frames. The asymmetry is the whole table, and
-it is the one conclusion that the clutter correction left untouched.
-
-**This row stands in for nuScenes with the wrong classes, and the number is
-retained rather than corrected.** It assumes stop lines and no point landmarks;
-reading the map showed the opposite — the stop-line annotation is an area with
-no bar direction, and there are 307 traffic lights. The real proxy is
-`[0,1,2,5]`. What the row still shows is the *mechanism*: removing point
-landmarks costs longitudinal error and leaves lateral alone.
-
-Taken at face value it says nuScenes' class set costs 3.3× longitudinal, not
-the 2.3× M0 measured.
-The gap widened because the full-evidence number improved and the restricted one
-did not, which is what it means for poles and signs to be carrying the
-along-track information. **M2 should expect this**, and it is a sharper
-prediction than the one it replaces.
-
-**The `[2,3,4,5]` catastrophe is smaller and still a catastrophe**: 11.4 m
-against M0's 14.2 m. The robust solve helped and did not fix it.
-
-## M1 — do the mechanisms pay?
-
-Same checkpoint, one mechanism disabled at evaluation.
-
-| | trans | long | lat | yaw |
-|---|---|---|---|---|
-| baseline | 0.336 | 0.322 | 0.095 | 0.209° |
-| no dashed stripes | 0.339 | 0.328 | **0.085** | **0.169°** |
-| one refinement pass | **0.316** | **0.300** | 0.097 | 0.224° |
-| plain solve, no IRLS or gate | 0.358 | 0.301 | 0.194 | 0.495° |
-
-**The dashed-stripe result did not survive re-measurement.** It was 16% of
-longitudinal error, 0.293 against 0.340; it is now 1.9%, 0.322 against 0.328.
-The arm barely moved — the baseline did, because the corrected clutter rule made
-along-track harder for everything, and the gap closed from the other side. What
-remains is the *sign*: removing the stripes still costs longitudinal and still
-improves lateral and heading, which is the signature of a feature that
-constrains one axis. What is gone is the claim that it is worth much.
-
-That the effect shrinks when clutter concentrates on lane geometry is at least
-consistent: a stripe end is a lane-class feature, and it competes with lane-class
-clutter for the matcher's attention.
-
-**The second refinement pass is now a small loss, not a wash.** One pass scores
-0.316 against two at 0.336 — 6% better for half the step time. It was 0.309
-against 0.308 before. The caveat stands: this model was *trained* with two
-passes, so it measures inference, not whether training with one would have been
-as good. But the direction has changed from "buys nothing" to "costs something",
-and the training-time ablation is now worth the hour it takes.
-
-**The robust solve earns its place**, and this is unchanged. Turning off
-reweighting and the abstention gate doubles lateral error (0.095 → 0.194) and
-more than doubles heading (0.209° → 0.495°). Longitudinal is marginally *better*
-without it, which fits: robustness trades a little accuracy on easy frames for
-much more on hard ones.
-
-## M1 — the step-matched A/B
-
-Two runs stopped at 2 000 steps rather than at equal wall clock: temporal fusion
-changes the input width, so equal time would hand the shorter model more
-training and the comparison would measure throughput instead of the mechanism.
-
-| arm | val trans RMSE | ms/step |
-|---|---|---|
-| the model | **1.107** | 307 |
-| no history | 1.239 | 305 |
-| *(the prior, for scale)* | *1.67* | — |
-
-**History is worth 10.7% of translation at 2 000 steps**, and the step time does
-not move — 305 ms against 307. That is not evidence it is free: `tools/bench.py`
-reports the loader as the limit on this box, so a model-side cost of two thirds
-of the detection tokens is hidden underneath it.
-
-What 2 000 steps cannot say is what history is worth at convergence; M0 needed
-37 000. The converged tables above are that measurement.
-
-```bash
-tools/train.py --config configs/synth_base.yaml train.max_steps=2000
-tools/train.py --config configs/ablate_no_history.yaml train.max_steps=2000
-```
-
-## M1 — does the matcher need to be learned?
-
-Every ablation here varies something *inside* the learned matcher: which
-classes it sees, which head reads it, how many passes it takes. None asks
-whether it needs to be learned. `tools/baseline_matcher.py` asks. Same anchored
-point sets, same closed-form pose head, same cost surface, same evaluator, with
-the assignment produced by mutual nearest neighbour under a Gaussian kernel and
-nothing trained.
-
-| | trans | recall @ 0.25 m, 0.5° | of the prior's error removed |
-|---|---|---|---|
-| *the prior* | *1.611* | *1.3%* | — |
-| geometric, one pass | 1.468 | 10.1% | 9% |
-| geometric, two passes | 1.433 | 15.3% | 11% |
-| geometric, five passes | 1.379 | 24.5% | 14% |
-| geometric, ten passes | 1.349 | 29.0% | 16% |
-| **learned** | **0.336** | **96.0%** | **79%** |
-
-Iterating the baseline is the fair comparison: the model re-matches after moving
-detections, so a one-shot classical matcher would be losing to ICP rather than
-to a transformer. Given ten passes against the model's two it closes almost
-none of the gap.
-
-**Nearest neighbour cannot resolve this association, and the reason is the
-observability problem this whole project is built on.** With 1.5 m of
-along-track prior error and lane dashes every few metres, the nearest map point
-to a detection is routinely the wrong one -- the next dash along, or the
-parallel lane's. Proximity is ambiguous exactly where the evidence is weakest.
-What the trunk supplies is context: *which* of four parallel lines this is,
-which is what the self-attention was put there for.
-
-**The covariance is most of the way there without any learning.** The baseline
-reports the raw surface with the learned scale zeroed, and its NEES/dof median
-is 0.465 against a target of 0.789 -- pessimistic by a factor under two, not
-wrong by orders of magnitude. The surface construction supplies the shape of
-the uncertainty and the learned scale supplies the rest. The two rows are not
-scoring the same poses, so this is a weaker claim than the table, but it says
-the calibration is not something training invents from nothing.
-
-```bash
-tools/baseline_matcher.py --split test --iters 10
-```
-
-## M1 — the head rematch
-
-The robust solve against the `tanh`-bounded regression baseline that beat its
-predecessor seven to one. Both trained to convergence, test split.
-
-| | Procrustes | Regression |
-|---|---|---|
-| baseline trans | 0.336 | **0.248** |
-| baseline yaw | **0.209°** | 0.430° |
-| lane geometry only, trans | 1.371 | **0.971** |
-| no lane geometry, trans | 11.415 | **2.381** |
-| no lane geometry, yaw | 27.780° | **1.616°** |
-
-**The closed-form head still loses on translation, and still loses badly off
-distribution.** Robustness narrowed the out-of-distribution gap from 7× to 4.6×
-and nothing more, and the in-distribution gap widened to 35% under the corrected
-clutter rule — the regression head is less disturbed by clutter, which is what a
-bounded estimator over a pooled feature would be. What the closed form does win is **heading** — 0.211° against
-0.430°, a factor of two, and that holds in distribution where most frames live.
-
-So the split is cleaner than last time rather than resolved: solving the
-geometry gives better rotation and worse translation, and a bounded regressor
-degrades far more gracefully when the evidence is wrong. The honest reading is
-that neither is dominant, and the parameter-free head is justified by rotation
-accuracy, interpretability and quantization behaviour rather than by RMSE.
-
-## M1 — one refinement pass, not two
-
-`refine_iters` runs the trunk again over detections moved by the first pass's
-answer: a full forward, no parameters. The default was two.
-[OPEN_ITEMS.md](OPEN_ITEMS.md) recorded that evaluating the two-pass checkpoint
-at one pass scored better -- 0.316 against 0.336 -- and that this was not the
-same as training with one. It is not, and the gap runs both ways.
-
-**Evaluating at a pass count you did not train for is catastrophic, and open
-loop cannot see it:**
-
-| the two-pass checkpoint, evaluated at | trans | NEES/dof median | closed loop |
-|---|---|---|---|
-| two passes, as trained | 0.336 | **0.786** | **0.087** |
-| one pass | **0.316** | 0.146 | 3.182 |
-
-Six percent better on RMSE and thirty-six times worse in the loop. The
-covariance is what breaks. A single pass leaves a broader surface, so the
-reported variance is five times too wide, the filter under-weights every
-correction it is given, and 3.3% of scenes diverge with the trust head refusing
-in runs of seventy-four frames. RMSE alone reports none of that.
-
-**Trained with one pass, one pass wins outright.** Same seed, same data, the
-same 2 283 397 parameters -- refinement adds none -- and one flag apart:
-
-| | two passes | one pass |
-|---|---|---|
-| best val trans | 0.3048, step 33 300 | **0.2123, step 9 250** |
-| test trans | 0.336 | **0.221** |
-| test, trusted frames | 0.297 | **0.186** |
-| ANEES *(1.0 is honest)* | 4.783 | **1.820** |
-| NEES/dof median *(0.789 is calibrated)* | **0.786** | 0.744 |
-| frames above NEES/dof 10 | 0.42% | **0.36%** |
-| closed loop trans | 0.087 | **0.083** |
-| closed loop NEES/dof median | 0.795 | **0.788** |
-| frames per second | 173 | **327** |
-
-A third less error, a mean four times better behaved, a smaller tail, and 1.9x
-the throughput. It also reaches its best 3.6x sooner in steps, so the compute
-spent to get there is roughly seven times less.
-
-**Why two ever looked right** is the first table: a checkpoint trained for two
-is plainly worse at one, and that is the reading the earlier note took. The
-pass count is not free to change after training, which is what made a true
-statement about RMSE point the wrong way.
-
-**What this does not settle.** One seed. And both runs end past their best --
-one pass by 19%, two by 10% -- so 37 000 steps is the wrong budget for the
-faster configuration and a shorter schedule may beat both. The default is left
-at two because moving it means retraining the teacher, the distilled student
-and the pruned variants, and one seed does not buy that.
-
-```bash
-tools/train.py --config configs/synth_base.yaml model.refine_iters=1 \
-    train.out_dir=runs/refine1
-```
-
-## M1 — how many attention heads, and what one seed can settle
-
-`dim` stays 128, so fewer heads means *wider* heads at an identical parameter
-count — the opposite of what [head pruning](#heads-and-channels-break-the-model-in-opposite-directions)
-does, which holds `head_dim` at 32 and narrows the projections. Three converged
-runs, one flag apart.
-
-| heads | `head_dim` | open loop | closed loop | p50 latency |
-|---|---|---|---|---|
-| 4 | 32 | 0.336 | **0.087** | **7.632 ms** |
-| 2 | 64 | 0.366 | 0.093 | 7.972 ms |
-| 1 | 128 | **0.247** | 0.089 | 8.444 ms |
-
-**Latency answers cleanly: fewer, wider heads is slower**, by 4.5% and 10.6%,
-with p50 and p99 inside 0.01 ms of each other. `head_dim = 32` is too small to
-keep a tensor core fed, and widening it does not help — at batch 1 this model is
-launch-bound, so the matmul saving never reaches the wall clock. That retires a
-claim this repository carried in a config comment for months.
-
-**Accuracy answers nothing, and that is the result worth having.** 4 → 2 → 1
-gives 0.336, 0.366, 0.247: non-monotonic, spanning 48% of the smallest value,
-one seed per arm. No head-count effect has that shape. What the sweep measures
-is the seed-to-seed spread of this training setup, and that spread is wider than
-almost every architectural difference reported in this file.
-
-The step-matched sweep at 2 000 steps put the same three arms within 0.3% of
-each other, in a different order again. Neither is measuring head count.
-
-**So read every table in this file with a band around it.** Each is one run per
-arm. A few percent between two configurations — the refinement pass, the
-head rematch, whether a mechanism pays — sits inside the band this sweep just
-measured, and should be read as "not separated" rather than as a ranking. What
-survives it are the large effects: the learned matcher against the geometric one
-(4.4×), closed loop against open (3.9×), distillation (21%), and the failure
-modes, which differ in kind rather than in degree.
-
-```bash
-tools/train.py --config configs/synth_base.yaml model.num_heads=2 \
-    train.out_dir=runs/nh2
-tools/train.py --config configs/synth_base.yaml model.num_heads=1 \
-    train.out_dir=runs/nh1
-```
 
 ## Identities, each with a test
 
