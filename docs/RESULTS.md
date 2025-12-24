@@ -82,6 +82,29 @@ lines, so every seed lands in the same place. **The axis that is structurally
 weak is the axis that is empirically unstable** — and it is the same axis whose
 uncertainty a point-to-point residual structurally cannot express.
 
+### Closed loop, through the filter
+
+| seed | longitudinal | lateral | translation |
+|---|---|---|---|
+| 0 | 0.056 | 0.067 | 0.087 |
+| 1 | 0.058 | 0.068 | 0.089 |
+| 2 | 0.055 | 0.067 | 0.087 |
+| 3 | 0.069 | 0.067 | 0.096 |
+| 4 | 0.056 | 0.066 | 0.087 |
+| 5 | 0.056 | 0.067 | 0.087 |
+| **mean** | **0.058** | **0.067** | **0.089** |
+| **CV** | 9.1% | 0.94% | **4.1%** |
+
+Closing the loop is worth **2.9×** on the mean (0.258 → 0.089), and almost all
+of that is along-track: 0.240 → 0.058, a factor of **4.1**, against 1.4× on
+lateral. Intermittent along-track evidence accumulates over a run of frames, so
+the filter recovers precisely the axis a single frame cannot see. Closed loop,
+longitudinal ends up *better* than lateral.
+
+Closed loop is also the more reproducible metric — 4.1% against open loop's
+15.4% — because averaging over 74 frames suppresses the frame-to-frame
+variance that dominates a single-frame RMSE.
+
 ### What this changes
 
 **Compare arms on `long` and on recall, not on `trans`.** `trans` is the
