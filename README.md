@@ -48,6 +48,34 @@ of learning to match.
 `delta` is the whole task. The prior is wrong by 1.5 m along track, 0.6 m
 across and 1° of heading; recovering that is what is being learned.
 
+## How it localizes
+
+Association is the hard part, not geometry. Given correct correspondences the
+pose is a closed-form least-squares solve; what is difficult is that lane
+dashes repeat every few metres and parallel lines are locally identical, so the
+nearest map element to a detection is routinely the wrong one — and wrong most
+often *along* the road, the axis the landmarks constrain worst.
+
+So the network spends its parameters on matching and none on the pose:
+
+```
+  map elements ──── encode ──┐
+                             ├── match ── assign ── Procrustes ── delta
+  detections    ──── encode ─┘                          │
+  this frame + 2 warped here                            └── curvature ── cov
+```
+
+One token per *point* rather than per element, a rotary encoding that carries
+relative geometry into the attention scores with no N × N bias tensor, a
+partial assignment that lets a detection match nothing at all, and then a
+**zero-parameter** weighted Procrustes solve — which cannot overfit, quantizes
+exactly, and makes a wrong pose a *visible* wrong assignment.
+
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) walks the whole network — the
+shapes at each stage, the Procrustes derivation, and why the robust weight has
+to be annealed rather than switched on. [docs/ROADMAP.md](docs/ROADMAP.md)
+argues for each choice and says what it still has to prove.
+
 ## Getting started
 
 ```bash

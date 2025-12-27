@@ -127,6 +127,96 @@ an effect of attention heads.
 1.9 standard deviations above the six-run mean of 0.258, so any comparison made
 against 0.336 is made against the worst draw of six.
 
+## Tokens: point beats element by 12.7 points of recall
+
+*(2025-12-26. Synthetic, 4 layers, `dim` 128, `rope` on both sides, 8 880 test
+frames. Three seeds each on the treatment and the `rope` control, one on the
+`relative` control.)*
+
+| | `long` | `lat` | `yaw` | recall @25 cm+0.5° | NEES median |
+|---|---|---|---|---|---|
+| **point tokens** *(mean of 3)* | **0.243** | **0.095** | **0.178** | **95.9%** ± 1.3 | 0.040–0.198 |
+| element tokens, `rope` *(mean of 3)* | 0.508 | 0.184 | 1.195 | 83.1% ± 3.0 | 0.018–0.282 |
+| element tokens, `relative` *(1 seed)* | 0.270 | 0.128 | 0.262 | 79.9% | 0.196 |
+
+**12.7 points of recall, 6.8 pooled seed standard deviations.** Every point
+seed beats every element seed with no overlap — worst point 94.4% against best
+element 85.6% — which is a firmer statement than any σ count.
+
+**A single control seed and a borrowed band both inflate the margin.** Element
+tokens are **2.4× noisier** than point tokens — sd 3.0 points against 1.3 — so
+scoring the gap with one element seed for the control, against the point arm's
+spread, reads 16.1 points at 12.6 σ. Three seeds a side against a pooled band
+reads 12.7 at 6.8. The effect survives; the confidence in it does not.
+
+**Element tokens are also less reproducible**, which is a result in its own
+right: on `trans` their spread is CV 15.3% against point tokens' 4.2%.
+
+**The choice of element control does not change the verdict.** That was a real
+worry: `ModelParams` carries two geometry fields — `geometry`, read for element
+tokens, and `point_geometry`, read for point tokens — so the first sweep
+compared point+`rope` against element+`relative` and was two variables. Run
+properly, the two element arms land at 83.1% (mean of 3) and 79.9% (1 seed) —
+inside each other's seed spread — so the tokens result stands whichever is
+called the control. `rope` costs element tokens accuracy — lateral 0.184
+against 0.128, longitudinal 0.508 against 0.270 — without touching their
+recall, which is its own open question.
+
+**And the two metrics rank the seeds differently.** One element-token `rope`
+seed has the *worst* validation `trans` of the three (0.4601) and the *best*
+test recall (85.6%), because its errors are a heavy tail rather than a wide
+bulk — yaw RMSE 2.626° against another seed's 0.305°. This is the concrete
+reason not to compare arms on `trans`, and the reason `best.pt` selecting on it
+is a defect rather than a detail.
+
+**Why the point-token matcher needs fp32.** Under bf16 autocast a 768×576
+score matrix drives the largest logit to 1.9e7 where the element arm's 96×72
+tolerates the same code, and the point-token arm cannot train at all.
+`matcher.py` forces fp32 for that einsum for exactly this reason.
+
+Two points of the 12.7 are not association: recall is a joint 0.25 m **and** 0.5°
+gate, and element+`rope`'s heading RMSE is 6.7× worse — 1.195 against 0.178.
+The rest is.
+
+## What a configuration costs
+
+*(2025-12-26, `tools/cost.py` on the RTX 2070, synthetic tensors, no
+dataloader. Milliseconds, p50 of 30.)*
+
+| cell | params | fwd b1 | fwd b64 | fwd+bwd b64 | peak MiB |
+|---|---|---|---|---|---|
+| heads A 2×64 | 1.709 M | 34.00 | 160.44 | 575 | 4843 |
+| heads B 4×64 | 2.764 M | 37.22 | 260.27 | 994 | 6199 |
+| heads C 2×32 | 1.181 M | 33.80 | 142.80 | 462 | 4181 |
+| tokens point | 1.709 M | 36.48 | 176.92 | 612 | 5006 |
+| tokens element | 1.813 M | 43.80 | **78.78** | 149 | 3214 |
+| layers 2 | 0.914 M | 24.33 | 103.47 | 341 | 3149 |
+| layers 4 | 1.709 M | 34.21 | 177.57 | 613 | 5006 |
+| `dim` 64 | 0.433 M | 34.16 | 131.89 | 418 | 3028 |
+| `dim` 256 | 6.793 M | 34.71 | 354.14 | OOM | 6565 |
+
+**"Parameters are close to free" is true at batch 1 and false at batch 64.**
+`dim` 64 → 256 is **15.7× the parameters** for **+1.6%** of batch-1 latency —
+the roadmap's claim, confirmed — but **2.69×** at batch 64. Training runs at
+batch 64, so parameters are not free for the thing that costs days; they are
+free for the thing that costs milliseconds. The roadmap quotes the batch-1
+figure while sizing a model by training cost.
+
+**"Tokens are what cost" holds, and it is the stronger claim.** Point tokens
+have *fewer* parameters than element tokens — 1.709 M against 1.813 M — and
+cost **2.25×** as much at batch 64. That is the price of the 12.7-point recall
+gain, and it is worth stating next to it.
+
+**At batch 1 the head cells are within 10% of each other** (33.80, 34.00,
+37.22), which is this model being launch-bound at batch 1: whatever the heads
+arms say about accuracy, head count is nearly free at inference and expensive
+in training — B costs **1.73×** the step time (994/575 on forward *and
+backward*; the forward-only ratio is 1.62, and a training step is not
+forward-only) and 1 356 MiB more.
+
+The practical consequence: `dim` 256 could not complete a backward pass in
+7.6 GiB, so a teacher at that width needs the A6000 or gradient checkpointing.
+
 ## M2 — the matcher, measured
 
 First full run of the element-token matcher: 800 scenes, 40 epochs, the same
