@@ -178,6 +178,170 @@ Two points of the 12.7 are not association: recall is a joint 0.25 m **and** 0.5
 gate, and element+`rope`'s heading RMSE is 6.7× worse — 1.195 against 0.178.
 The rest is.
 
+## Geometry — the equivariance claim is load-bearing
+
+*(Six arms, three seeds a cell, one recipe: 25 epochs, cached, `grad_clip`
+10.0. One cell is `point_geometry=rope`, the other `absolute`, and nothing else
+differs. Measured 2025-12-28.)*
+
+| cell | recall @25 cm | mean | sd | NEES median |
+|---|---|---|---|---|
+| **rope** | 0.934 / 0.944 / 0.906 | **0.9280** | 1.97 pp | 0.637 / 0.259 / 0.937 |
+| absolute | 0.830 / 0.833 / 0.844 | 0.8357 | 0.74 pp | 0.393 / 0.512 / 0.555 |
+
+**+9.2 pp, SE 1.21 pp — 7.6 sd.**
+
+This sweep tests whether the equivariance is decorative, and states the reason
+it might not be: at point resolution, two points on two parallel lane lines at
+the same station have **identical content features**, so the only thing
+separating them is their frames. `absolute` adds position to the token and has
+to learn the invariance; `rope` carries relative position into the score and is
+translation-invariant by construction.
+
+**Learning it costs 9.2 points of recall.** The claim is load-bearing.
+
+Note the asymmetry in the spreads: `rope` is the *noisier* cell at 1.97 pp
+against `absolute`'s 0.74. Both derive `rope_bands` — but the `absolute` cell
+does not use `RotaryFrames` at all, so band count is simply irrelevant to it.
+The two cells are not noisy for comparable reasons and the spreads should not
+be read against each other.
+
+## Width, and a pattern that now holds on three axes
+
+*(`rope_bands` pinned at 5 in every width cell, 25 epochs, cached, measured
+2025-12-28.)*
+
+| width | recall @25 cm | sd | NEES median, mean of cell |
+|---|---|---|---|
+| `dim64` (3 seeds) | 0.893 / 0.918 / 0.900 → **0.9037** | 1.29 pp | **1.000** |
+| `dim128` (2 seeds) | 0.963 / 0.954 → **0.9585** | 0.64 pp | **0.108** |
+
+**+5.5 pp, SE 0.87 pp — 6.3 sd.** Width separates — but **not cleanly, and the
+gap is not all width.**
+
+Every width cell pins `rope_bands=5`, and `RotaryFrames` rotates `6 * bands`
+channels out of `head_dim`, leaving the rest for content. `head_dim` is
+`dim // heads`, so it moves with the width:
+
+| cell | `head_dim` | rotated | **content** | recall |
+|---|---|---|---|---|
+| `dim64` | 32 | 30 | **2** | 0.9037 |
+| `dim128` | 64 | 30 | 34 | 0.9585 |
+| `dim256` | 128 | 30 | 98 | 0.945 |
+
+**`dim64` has two content channels.** That is the identical starvation the
+heads analysis used to reject its `head_dim` 32 cell, and it means "`dim128`
+beats `dim64` by 5.5 pp" conflates *width* with *content capacity*. The sweep
+cannot separate them.
+
+**The comparison that matters is unaffected.** Saturation between 128 and 256
+is 34 content channels against 98 — neither starved — so `dim256_s0` at 0.945
+against `dim128`'s 0.9585 remains a fair reading. What is no longer safe is the
+claim that narrowness *per se* costs 5.5 pp.
+
+Checked against the other sweeps: tokens, residual and depth all compare cells
+with identical `head_dim` and identical band counts, so they are unaffected.
+Geometry compares `rope` at four content channels against `absolute`, which
+uses no rotation at all — so its 9.2 pp is if anything a **lower bound** on what
+rope is worth.
+
+**And the capacity-versus-calibration trade now holds on three independent
+axes**, which is what turns it from a coincidence into a property of this
+model:
+
+| axis | smaller | larger | NEES, smaller → larger |
+|---|---|---|---|
+| depth | `L2` | `L4` | 1.016 → 0.081 |
+| **width** | **`dim64`** | **`dim128`** | **1.000 → 0.108** |
+| residual *(the repair)* | line @ 4 layers | point-to-point @ 4 layers | 0.04–0.20 → 0.68–0.76 |
+
+**Capacity buys recall and destroys the line residual's covariance, by about
+tenfold, and it does not matter whether the capacity is bought with layers or
+with width.** The small models are the honest ones and the large models are the
+accurate ones — except with point-to-point, which is the only configuration
+measured that is both. That is why the residual verdict matters *more* as the
+teacher grows, and it is the clearest argument this project has produced for
+the design it chose.
+
+**What `dim256` has to answer is therefore not "is wider better".** That is
+settled twice over. It is whether accuracy has **saturated** by 128, because
+the roadmap sizes a teacher by growing it until it does, and that single number
+sets the teacher's width.
+
+### `dim256`, both seeds: accuracy saturates at 128
+
+| width | recall @25 cm | NEES median |
+|---|---|---|
+| `dim64` (3 seeds) | 0.9037 | ~1.000 |
+| `dim128` (2 seeds) | **0.9585** | 0.108 |
+| `dim256` (2 seeds) | 0.945 / 0.958 → **0.9515** | 0.290 / 0.106 |
+
+Read against the rule registered before the arm reported — a gain needs 0.990,
+because one seed against two at this regime's 1.29 pp noise gives SE 1.58 pp —
+**0.945 is not separated from `dim128`**, and the point estimate is 1.35 pp
+*lower* (−0.85 sd). Doubling width again buys nothing measurable.
+
+**And `dim256` is not handicapped in this comparison.** At `head_dim` 128 with
+5 bands it carries 30 rotated channels and **98** for content, against
+`dim128`'s 30 and 34. Strictly more capacity of both kinds, and no better
+result. `dim64 → dim128` bought 5.5 pp at 6.3 sd; `dim128 → dim256` buys
+nothing.
+
+**The second seed agreed: 0.958, mean 0.9515, −0.70 pp against `dim128` at
+−0.89 sd.** Both `dim256` seeds land inside `dim128`'s range.
+
+| step | gain |
+|---|---|
+| `dim64` → `dim128` | **+5.5 pp** |
+| `dim128` → `dim256` | **−0.70 pp** |
+
+> **So the teacher is `dim` 128.** `ROADMAP` sizes a teacher by growing it
+> *"until accuracy saturates"*, and saturation is at 128 — a 256-wide teacher
+> would be four times the parameters for nothing. Sizing a teacher from the
+> roadmap rather than from a measurement is exactly what a saturation sweep
+> exists to prevent.
+
+The cascade is favourable. At `dim` 128 with `inner = dim`, `head_dim` derives
+to **64** — the configuration the depth, geometry, tokens and residual sweeps
+all ran. The teacher stops being a novel architecture and becomes one this
+project has already measured from four directions.
+
+> Held in view: `dim128` is two seeds. At 6.3 sd the direction is not in doubt;
+> the magnitude would be firmer with a third seed.
+
+## Depth — the first sweep that separated cleanly
+
+*(Six arms, three seeds a cell, launched together under the same recipe: 40
+epochs, cached, `grad_clip` 10.0, `rope_bands` derived to 10. Measured
+2025-12-28.)*
+
+| cell | recall @25 cm+0.5° | mean | sd | NEES median |
+|---|---|---|---|---|
+| `L2` 2 layers | 0.866 / 0.867 / 0.864 | 0.8657 | **0.15 pp** | 0.989 / 1.057 / 1.001 |
+| `L4` 4 layers | 0.968 / 0.970 / 0.953 | **0.9637** | 0.93 pp | 0.040 / 0.048 / 0.156 |
+
+**+9.8 pp, SE 0.54 pp — 18 sd.** After a tokenizer result at 6.8 sd and a heads
+result that could not reach 1.1, this is the first structural contrast that
+separated without argument, and it did so because both cells let `rope_bands`
+derive rather than pinning it. **Two layers is not enough.**
+
+**The calibration goes the other way, and by more.** Mean NEES is 1.016 at two
+layers against 0.081 at four — **12.5× apart**, and on opposite sides of the
+0.789 target: the shallow model is mildly overconfident, the deep one wildly
+pessimistic. Depth buys accuracy and sells calibration, on the *same* residual.
+
+> **This is a property of depth *with the line residual*, not of depth.** The
+> point-to-point arms are also four layers, and they score NEES 0.681–0.761
+> with a covariance 1.10× the reference and the right way up. So the repair for
+> the deep model's covariance is the residual, which is already the verdict —
+> and [the refcov comparison](#the-over-wide-covariance-is-depth-and-at-four-layers-it-inverts)
+> shows what the line residual does at this depth: 17.7× too wide, inverted,
+> principal axis 78.5° out.
+
+The practical reading for the teacher: **4 layers, point-to-point**. That pair
+is the only configuration measured here with both the recall of depth and an
+honest covariance, and it has three seeds behind it.
+
 ## What a configuration costs
 
 *(2025-12-26, `tools/cost.py` on the RTX 2070, synthetic tensors, no
