@@ -178,6 +178,111 @@ Two points of the 12.7 are not association: recall is a joint 0.25 m **and** 0.5
 gate, and element+`rope`'s heading RMSE is 6.7× worse — 1.195 against 0.178.
 The rest is.
 
+## Heads — registered before the arms report
+
+*Written 2025-12-31 09:10, with the six arms 40 minutes in and no epoch
+reported. Registered in advance because the predicted outcome is a null, and a
+null is the easiest result in the world to talk yourself out of afterwards.*
+
+Three cells, two seeds each, point tokens, line residual, `grad_clip` 10.0,
+`rope_bands` pinned at 5 in all three:
+
+| cell | heads | head_dim | params | asks |
+|---|---|---|---|---|
+| A | 2 | 64 | 1.709 M | control |
+| B | 4 | 64 | 2.764 M | does the *number* of attention distributions matter? |
+| C | 2 | 32 | 1.181 M | does head *width* — the rank cap — matter? |
+
+**Decided on** recall @25 cm+0.5°, with lateral RMSE co-primary. Not on
+`trans`: longitudinal error varies 17.7% between seeds where lateral varies
+0.67%.
+
+**What is readable.** The seed band is this network's own — sd 0.0127 on recall
+over the three point-token seeds. At two seeds a cell, SE(diff) is 1.27 pp, so
+only a gap above **2.5 pp** can be called. On `trans` the threshold is 0.018 m.
+
+**Predicted: both contrasts null.** The rank argument says a head's score
+matrix has rank at most `head_dim`; at point tokens the matrix is 768 × 576, so
+a cap of 32 or 64 against a maximum of 576 sounds binding. It should not be.
+What the score has to express is proximity in an SE(2)-transformed plane plus a
+class match, and that is low-rank by construction — 32 is likely already more
+than it needs. For the count, `ROADMAP.md` argues an element needs two
+attention distributions at once, lateral neighbours and along-track structure,
+which predicts 2 is enough and 4 adds nothing.
+
+**So the informative outcomes are the refutations.** If C is worse by more than
+2.5 pp, rank is binding and `head_dim` is a real knob. If B is better, the
+count argument understated how many relation classes point tokens carry — there
+are at least two that element tokens never had, within-element point ordering
+and temporal-copy identity among the 512 warped-history points.
+
+**A null here does not mean "no effect".** It means not separated at 2.5 pp with
+two seeds. The honest reading of a null is that neither knob is worth the
+parameters — B costs +62% and C saves −31% — not that the rank argument was
+proved.
+
+## `rope_bands` — an interior optimum at 5, and the wavelength argument rescued
+
+*(Three cells, `head_dim` 64, one recipe — same epochs, same `grad_clip`, same
+residual — differing only in the band count: 10 derived (3 seeds), 5 pinned
+(2 seeds), 3 pinned (1 seed).)*
+
+`RotaryFrames` rotates `6 * bands` channels and passes the rest through, so
+positional resolution is bought out of content capacity:
+
+| bands | rotated | content | shortest wavelength | recall @25 cm | sd |
+|---|---|---|---|---|---|
+| 3 | 18 | 46 | 7.500 m | 0.940 | — *(1 seed)* |
+| **5** | 30 | 34 | 1.875 m | **0.9585** | 0.64 pp |
+| 10 | 60 | 4 | 0.059 m | 0.9280 | 1.97 pp |
+
+**Five is an interior maximum**: 3 loses 1.85 pp on one seed and 10 loses
+3.05 pp at 2.5 sd. So it is not "content always wins" — it is a genuine trade
+with an optimum, and the value the width sweep happened to pin is the right one.
+
+**This also rescues the wavelength argument, which I had written off.** At 3
+bands the shortest wavelength is 7.5 m — four times the 1.714 m map point pitch
+— and it costs accuracy exactly as that reasoning predicted. The error was never
+that wavelength did not matter. It was assuming *only* wavelength mattered, and
+never printing what the resolution cost in content channels. One line of
+arithmetic, `6 * bands` against `head_dim`, governs both halves.
+
+**And the arithmetic points past the cells that were run.** At `head_dim` 64,
+`rope_bands=8` rotates 48 channels and leaves 16 for content, with a half-width
+of 0.268 m against the 0.25 m recall gate, at zero parameter cost. The sweep
+measured 3, 5 and 10, so 8 is a prediction from the channel budget rather than
+a result.
+
+### And at `head_dim` 128 the band count stops mattering
+
+The 256-wide cell rerun with 10 bands instead of 5 is the same single-variable
+change, one width up:
+
+| `head_dim` | bands | rotated / content | recall |
+|---|---|---|---|
+| 64 | 5 | 30 / 34 | **0.9585** |
+| 64 | 10 | 60 / **4** | 0.9280 |
+| 128 | 5 | 30 / 98 | 0.9515 |
+| 128 | **10** | 60 / 68 | **0.9520** |
+
+**At `head_dim` 128 the two settings are indistinguishable** — 0.9515 against
+0.9520 — where at 64 they differed by 3.05 pp. That is exactly what the content
+budget predicts: at 128 channels both settings leave plenty for content (98 and
+68), so the trade does not bite. It bites only when one side is starved, and 10
+bands at `head_dim` 64 leaves four.
+
+> **So the band count is not a global knob to tune. It matters only when
+> `6 * bands` approaches `head_dim`.** Deriving it is what fails —
+> `head_dim // 6` gives 10 at 64 and 21 at 128, and the first starves while the
+> second is numerically dead at a 2.9e-5 m wavelength. **State `rope_bands`
+> wherever `head_dim` changes, and check `6 * bands` against it.**
+
+This also settles the width verdict against its one remaining objection. The
+width sweep pinned 5 bands everywhere, so `dim256`'s loss to `dim128` could have
+been the encoding rather than the width. At 10 bands `dim256` scores 0.952 —
+still below `dim128`'s 0.9585. **Saturation at 128 is real at both band
+settings.**
+
 ## Geometry — the equivariance claim is load-bearing
 
 *(Six arms, three seeds a cell, one recipe: 25 epochs, cached, `grad_clip`
@@ -341,6 +446,90 @@ pessimistic. Depth buys accuracy and sells calibration, on the *same* residual.
 The practical reading for the teacher: **4 layers, point-to-point**. That pair
 is the only configuration measured here with both the recall of depth and an
 honest covariance, and it has three seeds behind it.
+
+## Why the heads arms were so noisy — registered before the width arms report
+
+*(Written 2025-12-31 11:55, with the 64-wide cell mid-training and no epoch
+measured. Registered in advance because it is a post-hoc explanation of a null,
+which is the easiest kind of story to tell and the hardest to trust.)*
+
+The heads cells could not be separated because their seeds disagreed by 5.2 to
+9.2 points of recall. The depth cells, same codebase and same hardware,
+disagree by **0.1 pp** — two 2-layer seeds at 0.866 and 0.867, with NEES 0.989
+against 1.057 where the heads cells varied tenfold. Whatever made the heads
+arms noisy is therefore **not** intrinsic to this project's seed variance.
+
+**The candidate is `rope_bands=5`.** It is the one structural difference: the
+heads arms pinned it, the depth arms let it derive to 10. At 5 bands the
+shortest wavelength is 1.875 m, *coarser than the 1.714 m map point pitch the
+point-token arm exists to resolve* — so the encoding cannot cleanly separate
+adjacent map points, and the assignment has to settle a genuinely ambiguous
+problem. A model resolving an ambiguity it has no information to resolve is
+exactly a model whose answer depends on its initialisation.
+
+> **The prediction does not hold, and the way it first looked confirmed is the
+> lesson.** The 64-wide cell came back at sd 1.29 pp against the 2-layer cell's
+> 0.15, F = 71.3 — two cells chosen out of eleven. Across all eleven the
+> grouping does not hold: the derived-band control has **sd 1.97 pp**, noisier
+> than the pinned-5 128-wide cell's 0.64. Excluding the heads cells the two
+> groups average 0.97 and 0.99 pp — no difference at all. The heads cells were
+> noisy for a reason of their own, and generalising from them was the mistake.
+>
+> Registering a prediction in advance is worth nothing if it is then checked
+> against a subset. That is the error, and it is worse than being wrong about
+> bands.
+
+## Heads — the arms reported, and the threshold was wrong
+
+*(Measured 2025-12-31 on the test split, 0 failures. Read this against the
+registration above, which was written before any arm had reported an epoch.)*
+
+| cell | seeds | recall @25 cm | mean | within-cell spread |
+|---|---|---|---|---|
+| A 2×64 *(control)* | s0 / s1 | 0.915 / 0.967 | 0.9410 | **5.2 pp** |
+| B 4×64 | s0 / s1 | 0.964 / 0.972 | 0.9680 | 0.8 pp |
+| C 2×32 | s0 / s1 | 0.967 / 0.875 | 0.9210 | **9.2 pp** |
+
+**The registered rule fired, and it has to be rejected anyway.** B beats A by
+2.70 pp against a 2.5 pp threshold, which reads as a refutation of the count
+argument. It is not one. That threshold was built on sd 0.0127 — the
+seed band of the three point-token seeds, a *different configuration* — and
+these cells do not have that spread. Their pooled sd is **4.33 pp**, 3.4×
+larger. Against the spread actually observed:
+
+| contrast | gap | SE(diff) | separation |
+|---|---|---|---|
+| B vs A | +2.70 pp | 2.63 pp | **1.03 sd** |
+| C vs A | −2.00 pp | 5.28 pp | **0.38 sd** |
+
+Neither is readable. Importing an error bar from another configuration is the
+mistake, and here it very nearly converted noise into a reported architectural
+finding.
+
+**The variance is inside the cells, not between them.** Cell C's two seeds
+differ by 9.2 points of recall at *identical* configuration, which is larger
+than any gap between cells. Calibration is worse still: NEES varies about 10×
+within a single cell — A reads 0.675 and 0.070, C reads 0.996 and 0.085. Any
+single-seed calibration claim anywhere in this repository should be read with
+that number in mind.
+
+**More seeds do not rescue it at any sane price.** Holding the observed
+spreads, a third seed moves B vs A from 1.03 to 1.26 sd — still nothing. The
+first readable count is about **eight seeds a cell**, and if the pooled 4.33 pp
+is the honest figure it is twenty-one. That is 18 to 57 further arms, one to
+two days of the whole machine, to resolve a knob the rank argument predicts is
+not binding.
+
+> **Verdict: not separated, and not worth separating.** `2 heads × 64` stays,
+> on the registration's own terms — *"neither knob is worth the parameters"*,
+> B costing +62% and C saving −31%. This is **not** evidence that the rank
+> argument is right; it is a measurement with too little power to test it, and
+> the registration said so in advance.
+
+**Narrow heads are not slow ones, so the rank cap is not a latency argument.**
+`ROADMAP.md` sizes `head_dim` by rank, not by tensor-core occupancy: measured
+over 1 344 point tokens, 4 heads at `head_dim` 32 is the *fastest* of the
+three — p50 7.632 ms, against 7.972 at 2×64 and 8.444 at 1×128.
 
 ## What a configuration costs
 
@@ -619,4 +808,42 @@ so its trace is what each detected point contributes. Read under
 `s² = cost / (dof − 3)`, the controlled residual comparison is
 [three seeds an arm](#the-residual-at-point-resolution--three-seeds-and-it-reverses),
 and it goes the other way.
+
+## Augmentation — not separable, and it was never what made those arms look good
+
+The augmented arms reached 0.977 mean recall and two of their three seeds
+trained the full 40 epochs without ever tripping patience. That is the
+signature of augmentation removing an overfit, and it could not be read that
+way, because those arms had no matched control: their nominal one — the
+point-token arms — ran `geometry=relative` where they ran `rope`, and worse,
+those arms have `augment: true` in their stored config while `set_epoch` was
+never called when they trained, so **the config field does not distinguish the
+two conditions**. Nothing on disk said which arms actually saw fresh noise.
+
+The no-augmentation arms are that control: same recipe, same `grad_clip`, same
+40 epochs, `data.augment=false` stated explicitly so the checkpoint records the
+condition.
+
+| (all `residual=line`, 40 epochs) | `trans` m | recall @25 cm | NEES |
+|---|---|---|---|
+| augmented, s0/s1/s2 | 0.230 / 0.240 / 0.209 | 0.982 / 0.968 / 0.982 | 0.022 / 0.079 / 0.036 |
+| no augmentation, s0/s1/s2 | 0.245 / 0.246 / 0.266 | 0.971 / 0.968 / 0.974 | 0.037 / 0.043 / 0.035 |
+
+**Augmentation is worth +0.63 pp of recall at t = 1.27 — not separated.**
+Translation is 0.026 m better with it, at t = 2.28, which is under the 2.78 this
+project's three-seed arms need at df = 4. Suggestive on translation, absent on
+recall, and not enough to act on either way.
+
+**So the 0.982 was not augmentation.** Turning it off keeps 0.971 of it. What
+produced it is the variable nobody was testing: these arms run
+`model.residual=line`, and their NEES of 0.022–0.079 against the honest 0.789 is
+the same catastrophic over-wide covariance the depth sweep found. The line
+residual buys roughly 1.5 pp of recall over the teacher's 0.963 and pays for it
+with the entire covariance — which is the residual verdict already on the
+record, arrived at a second time from a different direction.
+
+The cost of finding this out was six 40-epoch arms, three of them uncached and
+therefore slow. The cheaper version existed: state the control's condition in
+the arm definition rather than trusting a config field, and the first three arms
+would have been readable on their own.
 
