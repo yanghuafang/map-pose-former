@@ -178,6 +178,153 @@ Two points of the 12.7 are not association: recall is a joint 0.25 m **and** 0.5
 gate, and element+`rope`'s heading RMSE is 6.7× worse — 1.195 against 0.178.
 The rest is.
 
+## The residual at point resolution — three seeds, and it reverses
+
+*(Same run. Three seeds an arm, measured 2026-01-05, 0 failures.)*
+
+| | recall @25 cm+0.5° | NEES median (0.789 target) | tail >10 |
+|---|---|---|---|
+| point-to-line *(s0/s1/s2)* | 94.4 / 96.6 / 96.6 — **95.9%** | 0.198 / 0.040 / 0.066 | 0.06 / 0.01 / 0.02% |
+| **point-to-point** *(s0/s1/s2)* | 98.0 / 96.8 / 97.7 — **97.5%** | **0.681 / 0.761 / 0.701** | 0.33 / 0.45 / 0.30% |
+
+At point resolution the residual arm **reverses**, and the third seed holds it.
+
+**Calibration is the decisive half, and it does not overlap.** Every
+point-to-point seed lands at 0.68–0.76 against the 0.789 target; every
+point-to-line seed lands at 0.04–0.20. The worst point-to-point arm is 3.4×
+better calibrated than the best point-to-line one, and no seed of either arm
+comes near the other's range. Excluding the tail, point-to-point's ANEES is
+0.97–1.07 — the first covariance this project has produced that is simply
+right, rather than right on average by cancelling two errors.
+
+**Recall is the weaker half.** +1.6 points (97.5% against 95.9%), SE of the
+difference 0.82 pp, so **2.0 sd**. Real, but it is the calibration that carries
+this verdict, not the recall — and the heads arm is a standing reminder of what
+a 2 sd gap is worth when the spread is only estimated from three seeds.
+
+**The cost is the tail.** Point-to-point is confidently wrong on 0.30–0.45% of
+frames against point-to-line's 0.01–0.06% — a factor of ten to fifteen, and the
+reason its *mean* ANEES reads 1.7–3.0 while its median is honest. A localiser
+feeding a filter is judged partly on how rarely it lies confidently, so this is
+not a rounding detail: it is the price of the calibration, and M4 is where it
+gets charged. Widening on assignment ambiguity is the mechanism that should
+convert those frames from confidently wrong to honestly uncertain, and whether
+it does is a measurement nobody has made yet.
+
+That contradicts [the residual control](#the-residual-controlled-properly),
+which chose point-to-line at element resolution. Two things differ. The earlier
+comparison ran under the `mass` divisor, which penalised point-to-point by
+about two because a pole constrains two directions and a line point one while
+both counted as one correspondence. Counting degrees of freedom instead removes
+that penalty. And it ran at element resolution, where a pooled token cannot
+express which point matched.
+
+### The over-wide covariance is **depth**, and at four layers it inverts
+
+*(`tools/refcov.py`, 64 frames x 32 redrawn priors, 2026-01-05. One arm of each
+depth, both `line` residual, both under the same training recipe — so depth is
+the only difference.)*
+
+The section below credits point-to-point with an honest covariance and charges
+point-to-line with one 4.16x too wide. Every arm in that comparison had **four
+layers**, and the depth sweep then showed NEES swinging from ~1.0 at two layers
+to 0.048 at four on the *same* line residual. So the obvious question is whether
+"the residual reports an over-wide covariance" was ever about the residual.
+
+| | 2 layers | 4 layers |
+|---|---|---|
+| reference `σ_long/σ_lat` | 1.115 | 0.704 |
+| reported `σ_long/σ_lat` | 1.794 | **3.984** |
+| size, long | **1.44x** | **17.72x** |
+| size, lat | **0.89x** | 3.13x |
+| principal axis off by | 13.4° | **78.5°** |
+| verdict | reference near-isotropic, no call | **INVERTED** |
+
+**At two layers the line residual is very nearly right.** 1.44x along track and
+0.89x across it, axis 13.4° out — the same neighbourhood as point-to-point's
+1.10x/1.32x and 12.7°. At four layers the same residual reports **σ_long of
+1.0966 m**, seventeen times the 0.0619 m the errors actually show.
+
+**And it is systematic, at three seeds.** Measured on the 2070 after the fact:
+
+| | σ_long | σ_lat | axis off by | orientation verdict |
+|---|---|---|---|---|
+| 4 layers, line, s0 | 17.15× | 3.48× | 72.2° | reference too round to rule |
+| 4 layers, line, s1 | 17.72× | 3.13× | 78.5° | **INVERTED** |
+| 4 layers, line, s2 | 7.67× | 2.04× | 65.2° | reference too round to rule |
+| 4 layers, point-to-point, s0/s1/s2 | 1.10 / 1.07 / 1.14× | 1.32 / 1.27 / 1.37× | 12.7 / 13.7 / 11.1° | **RIGHT WAY UP** ×3 |
+| 2 layers, line, s0/s1/s2 | 1.44 / 1.29 / 1.13× | 0.89 / 0.84 / 0.92× | 13.4 / 7.3 / 8.5° | right way up where callable |
+
+**The formal `INVERTED` label fired on one of the three**, because the other
+two references were too near-circular for `refcov` to rule on orientation at
+all — which is the tool declining to invent a finding, and correct. The part
+that *is* consistent across all three is the substance: **7.7 to 17.7× too wide
+with the major axis 65 to 79° out.** Point-to-point at the same depth holds
+1.07–1.14× and 11–14° on every seed.
+
+So the accounting has to change in two places:
+
+**The absolute claim needs a depth qualifier.** "Point-to-line is 4.16x too
+wide" is true of a 4-layer model. A 2-layer one is 1.44x. The width was
+attributed to the residual and belongs at least as much to the depth.
+
+**The comparative claim survives, and is strengthened.** The point-token line
+and point-token point-to-point arms were both 4-layer, so that contrast was
+controlled and point-to-point still wins. What changes is the reading: depth is
+what *breaks* the line residual's covariance, and point-to-point is what holds
+it together under depth — 1.10x and right way up where line goes 17.72x and
+inverts. The residual choice matters **more** as the model gets deeper, not
+less.
+
+**And there is now a live tension in the depth sweep.** Four layers buys +10.4
+points of recall and costs a covariance that is seventeen times too wide and
+pointing the wrong way. On a localiser judged by what a filter can do with its
+output, those are not obviously trading in the right direction — and the arm
+that has both, 4 layers with point-to-point, is the one configuration this
+sweep has not isolated.
+
+### And the shape agrees with the scalar, which was not guaranteed
+
+*(`tools/refcov.py`, 64 frames x 32 redrawn priors each, 2026-01-05. One arm of
+each residual.)*
+
+NEES settles the residual on a *scalar*, and a scalar cannot see the shape of
+an ellipse. A NEES median of 0.786 against a 0.789 target is exactly the kind
+of number that passes while the covariance is 20.6× overconfident on the 1% of
+frames that matter — see
+[the tail](#the-covariance-can-be-calibrated-and-still-be-wrong). So the
+verdict above is not safe until the matrix agrees with it.
+
+| | sigma_long | sigma_lat | reported/reference |
+|---|---|---|---|
+| **point-to-point** reference | 0.0587 | 0.0805 | — |
+| **point-to-point** reported | 0.0649 | 0.1062 | **1.10x / 1.32x** |
+| point-to-line reference | 0.0792 | 0.0834 | — |
+| point-to-line reported | 0.3294 | 0.1522 | **4.16x / 1.82x** |
+
+**Point-to-point is the right size and points the right way.** 1.10x and 1.32x
+against a reference computed by redrawing the prior 32 times per frame, verdict
+`RIGHT WAY UP`, principal axis off by **12.7 degrees** over the 58 of 64 frames
+elongated enough to have one.
+
+**Point-to-line fails on shape worse than it fails on scale.** It is 4.16x too
+wide along track against 1.82x across it, so the error is not a uniform
+inflation that a single scale factor could repair — it is differential. And
+the direction is not merely wrong but invented: the reference is
+near-isotropic at 0.950, while the model reports an anisotropy of 2.165 and
+places its major axis **54.3 degrees** away. A model claiming a strong
+long/lat asymmetry where the truth is very nearly a circle is asserting
+structure that is not in the data.
+
+This is the half of the residual verdict that could have overturned it and did
+not. The scalar and the matrix now say the same thing.
+
+**0.681 was real.** The two replicates came back at 0.761 and 0.701, so the
+single seed that re-opened this was not a fluke — which was not the safe bet,
+given that the three point-to-line seeds span a factor of five on exactly this
+statistic. The open question moves from *is it calibrated* to *what does the
+tail cost in closed loop*.
+
 ## Heads — registered before the arms report
 
 *Written 2025-12-31 09:10, with the six arms 40 minutes in and no epoch
@@ -741,6 +888,49 @@ different from what this comparison suggests. Read that one.
 untouched by supervision. The residual moved it, which says the limit was
 always what the cost could *express* rather than what the model could learn.
 
+### Is the shape right?
+
+A covariance can pass every scalar test and still have the wrong shape. This is
+the number that catches that:
+
+| | reported `σ_long/σ_lat` | actual ratio | |
+|---|---|---|---|
+| reference network | 0.809 | 3.030 | **mixed aggregations**, not comparable; see [the aggregation trap](#the-covariance-can-be-calibrated-and-still-be-wrong) |
+| point-to-point, on geometry alone | 1.01 | — | blind to the landmarks |
+| **point-to-line, 4 layers** | **1.866** | 2.334 | right-side-up, within 20% |
+
+**That "actual ratio" column is a marginal, and the covariance is a
+conditional — they are not the same quantity.** 2.334 is the ratio of
+longitudinal to lateral RMSE *aggregated over all 8 880 frames*, which
+includes how much the error varies **between** frames. A covariance is a claim
+about one frame: given this geometry and these landmarks, here is the spread.
+
+`tools/refcov.py` measures the conditional directly, which is possible here
+only because the prior is *drawn* — fix a scene and a frame, redraw the sample
+seed 64 times, and the spread of the 64 resulting errors is what the model
+ought to be reporting. On the 4-layer point-to-line arm, 96 frames × 64 draws:
+
+| | σ_long | σ_lat | ratio |
+|---|---|---|---|
+| measured per-frame reference | 0.1008 | 0.0930 | **1.083** |
+| reported by the model | 0.3702 | 0.2627 | **1.409** |
+
+Two corrections follow. The covariance is **2.8× to 3.7× too wide**, not the
+2.27× that NEES 0.153 implies — the scalar understates it. And the per-frame
+error is **very nearly isotropic**, so the model over-states its anisotropy by
+about 30% rather than being "right-side-up within 20%".
+
+The ellipse points along the road, which is where the error is. But "the
+ellipse points along the road" is a statement about the *marginal* error, and
+at the per-frame level the road direction is much less distinguished than that
+table suggests. What is conditionally anisotropic and what is marginally
+anisotropic are different claims, and a table of marginals cannot tell them
+apart.
+
+That the ellipse points the right way at all is the whole of M3 in one line,
+and it is not something a better-tuned scale head could have achieved —
+point-to-point's translation Hessian is `2·mass·I` whatever the landmarks are.
+
 ### Is the size right?
 
 *(`tools/eval.py`, test split, 8 880 frames, the 4-layer point-to-line arm.
@@ -847,3 +1037,87 @@ therefore slow. The cheaper version existed: state the control's condition in
 the arm definition rather than trusting a config field, and the first three arms
 would have been readable on their own.
 
+## The covariance can be calibrated and still be wrong
+
+The reference network's NEES median of **0.786** against a 0.789 target is
+honest by every scalar test the harness applies, and its covariance is still
+wrong. Where it is wrong is not where a median of per-frame ratios says it is.
+
+> **The instrument was verified before it was believed**, against M1's seed-0
+> row — longitudinal 0.3222 against 0.322, lateral 0.0952 against 0.095, yaw
+> 0.2091° against 0.209°, translation 0.3360 against 0.336, recall 0.9600
+> against 0.960, NEES median 0.7860 against 0.786. Six of six to four decimals,
+> so what follows is the same model.
+
+**A reported 0.809 against a measured 3.030 compares two different
+populations.** The 0.809 is a *median of per-frame ratios* and the 3.030 a
+*ratio of RMS*. With a heavy-tailed error those are not the same statistic, and
+this error is violently heavy-tailed. Measured like for like:
+
+| aggregation | reported | measured | same side of 1.0? |
+|---|---|---|---|
+| medians both sides | 0.793 | 0.711 | **yes** |
+| RMS both sides | 1.054 | 3.385 | **yes** |
+| *median against RMS* | *0.809* | *3.030* | *no* |
+
+The sign of the discrepancy flips with the aggregation, which is the signature
+of comparing incomparable things. **There is no inversion.** 99.1% of frames
+report `σ_long < σ_lat`, and 59.9% of frames genuinely have
+`|e_long| < |e_lat|`. The ellipse points the right way for the typical frame.
+
+**The real failure is a tail, and it is worse than an inversion would be.**
+
+| | median | 99th | 99.9th | max |
+|---|---|---|---|---|
+| `\|err_long\|` | 0.045 | 0.211 | **4.049** | 7.999 |
+| `\|err_lat\|` | 0.063 | 0.259 | 0.332 | 0.461 |
+| `\|e_long\|/σ_long` | 0.671 | 2.946 | **62.1** | 120.6 |
+
+Along-track error jumps 19× between the 99th percentile and the 99.9th, and
+the reported σ tracks the first and not the second. On the **worst 1% of
+frames the error averaged 2.249 m against a claimed 0.308 m — 20.6×
+overconfident** — while the other 99% sat at 0.80×, slightly conservative.
+
+So the model is honest on 99% of frames and catastrophically wrong on the 1%
+where along-track geometry aliases. Every median statistic calls that
+calibrated, and it *is* calibrated, on 99% of frames. The RMS "3.030" was never
+the shape of the ellipse; it was that 1%, arriving in a statistic that had no
+way to say so.
+
+**This makes M4 more important, not less.** A filter is not harmed by the 99%.
+It is harmed by a frame it is told is certain and is not, because that is the
+one it cannot recover from — and "ambiguity widens the covariance rather than
+gating the frame" is precisely the repair this diagnosis calls for.
+
+`Calibration` reports `tail_z` per axis — `|z|` at the 99.9th percentile over
+the calibrated 3.29 — which reads **19.0×** on the reference network's
+longitudinal axis and 1.3× and 1.4× on the two that were fine. That is the
+number this section turns on.
+
+The cause is structural rather than a tuning failure. With point-to-point
+residuals the objective is `Σ aᵢⱼ‖R dᵢ + t − mⱼ‖²`, whose translation Hessian
+is `2·mass·I` — isotropic whatever the landmarks are. Measured on geometry
+alone, with the assignment held fixed:
+
+| landmarks | residual | `cond(H)` | reported `σ_long/σ_lat` |
+|---|---|---|---|
+| three lane lines | point-to-point | 340 | 1.01 |
+| three lane lines | point-to-line | **∞** | 16.6 |
+| + 2 poles | point-to-point | 344 | 1.01 |
+| + 2 poles | point-to-line | 10 424 | 5.34 |
+| + 8 poles | point-to-point | 365 | 1.01 |
+| + 8 poles | point-to-line | 3 042 | 2.91 |
+
+Point-to-point answers **1.01 to every one of them** — adding eight poles to a
+bare road does not move it, because the Hessian does not depend on where the
+landmarks are. Point-to-line varies from 16.6 to 2.91 as along-track evidence
+arrives and straddles the 3.030 the errors actually show. *Straddles, not
+predicts*: the pole count is chosen here, so what this establishes is that one
+residual can reach the observed anisotropy and the other cannot reach it at any
+landmark density.
+
+Lane lines alone make the Hessian **singular** rather than merely
+ill-conditioned, with the null direction along the road. That is the honest
+answer — with no along-track landmark there is no along-track measurement — and
+it is why the covariance has to fuse the prior rather than invert the
+measurement on its own.
