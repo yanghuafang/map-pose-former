@@ -1037,6 +1037,55 @@ therefore slow. The cheaper version existed: state the control's condition in
 the arm definition rather than trusting a config field, and the first three arms
 would have been readable on their own.
 
+## M4 — closed loop
+
+*(`tools/run_sequence.py` on the teacher checkpoint, 120 test scenes, 8 880
+frames, `measurement=information`. Measured 2026-01-08.)*
+
+| | open loop | closed loop | gain |
+|---|---|---|---|
+| reference network, six-run mean | 0.258 | **0.089** | **2.9x** |
+| 4 layers, covariance 2.3x too wide | 0.289 | 0.188 | 1.54x |
+| **teacher, NEES 0.909** | 0.271 | **0.091** | **2.98x** |
+
+**An over-wide covariance costs half the filter gain.** The 1.54x row is the
+point-to-line arm, whose covariance is [2.3x too wide](#is-the-size-right):
+imperfect correspondences from a matcher at 84.2% recall inflate
+`s² = cost / (dof − 3)`, so the filter under-weights every correction it is
+handed. The teacher matches at 96.3% and reports NEES 0.909 out of the same
+solve, and the gain is 2.98x, against the reference network's 2.9x.
+
+Per axis it is not merely close, it is the same model:
+
+| closed loop | `long` | `lat` | `yaw` |
+|---|---|---|---|
+| reference network | 0.058 | 0.067 | — |
+| inflated covariance | 0.150 | 0.115 | — |
+| **teacher** | **0.060** | **0.069** | **0.128°** |
+
+The inflated run was 2.6x worse along track and 1.7x worse across it. The
+teacher is within 3 mm of the reference on both. An over-wide covariance does
+not damage a filter diffusely — it under-weights every correction, and the axis
+carrying the most correction loses the most.
+
+**The loop is healthy by every margin it has.** No scene diverged, 99.9% of
+frames were accepted, and the longest run of consecutive refusals was 2 frames
+— short enough that the filter coasts on its own propagation and recovers. The
+0.1% refused were refused on `mass`, meaning too little map was in view to
+constrain a pose, which is the gate doing its job rather than failing.
+
+`trust` refused nothing, and it never could: this design has no trust head, so
+`engine/sequence.py` passes `trust=1.0` and the counter is vestigial.
+
+**This is the number the project exists to produce.** A single frame lands at
+0.271 m; the same model through the filter lands at **0.091 m**, three times
+better, because the covariance is honest enough for the filter to know how much
+to believe it. Every structural verdict above — point tokens, point-to-point,
+four layers, rope — was chosen against a calibration target rather than an
+accuracy one, and this is what that choice buys. An accurate pose with a
+dishonest covariance would have measured 0.188 m here and looked fine in every
+open-loop table on this page.
+
 ## The covariance can be calibrated and still be wrong
 
 The reference network's NEES median of **0.786** against a 0.789 target is
