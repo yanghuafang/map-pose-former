@@ -18,6 +18,27 @@ Stage 1 is nuScenes, which M5 reaches in two halves: first the generated map
 is replaced with a surveyed one and the error model stays, then the error
 model is replaced with a real detector — see [ROADMAP.md](ROADMAP.md).
 
+## Getting nuScenes
+
+Accept the Terms of Use at <https://www.nuscenes.org/nuscenes#download> first;
+`scripts/download_nuscenes.sh` cannot.
+
+```bash
+scripts/download_nuscenes.sh             # map, poses, CAN bus: 1.6 GB
+scripts/download_nuscenes.sh --mini      # ...and the 4 GB mini sensor split
+scripts/download_nuscenes.sh --blobs     # ...and 316 GB of camera and lidar
+```
+
+**The default is all the map stage needs**, because perception is an input
+here: detections are cut from the map and corrupted, and no detector is ever
+run. The blobs matter only once a real detector does, where a pretrained mapper
+reads the 53 GB of keyframe images inside them; the other 263 GB are sweeps and lidar that nothing here
+reads.
+
+The script checks every URL before transferring a byte, resumes, and names the
+files it expects — an archive unpacked into the wrong directory otherwise looks
+like success.
+
 ## The world
 
 `data/world.py` builds one scene per seed: 600 m of piecewise-constant-curvature
@@ -64,6 +85,65 @@ the opposite. `_crop` returns whole elements for this reason.
 
 `data.sample.stripe_dashed=false` removes the stripes without touching the map:
 same attribute, no paint pattern.
+
+## The split
+
+Geographic, not the official one: nuScenes' own train and val share roads, so a
+localizer evaluated on them has seen the ground it is tested on. Each city is
+cut along its longest axis with dead ground between the bands, and a scene joins
+a split only if its **whole trajectory** fits inside one — a scene that starts
+in train's band and ends in val's belongs to neither.
+
+Measured separation between test and train is **307 m**, six times the 50 m map
+query radius, so no map element is shared. That comparison is made **per city**:
+every nuScenes map has its own origin, so scenes on different continents sit at
+the same coordinates and comparing them together reports a collision that is not
+there. `tests/test_nuscenes.py` holds both properties.
+
+720 of 850 scenes survive; the rest straddle a boundary and are dropped.
+
+## What nuScenes actually carries
+
+The map expansion stores areas as polygons, and a polygon is not what a
+localizer can use. Each class needs the geometry its label denotes, or the model
+is told the wrong thing rather than nothing:
+
+| nuScenes layer | read as | why |
+|---|---|---|
+| `lane_divider`, `road_divider` | polyline | already a line |
+| `drivable_area` | closed outline | a boundary *is* a line |
+| `ped_crossing` | the polygon's long axis | an elongated area; its axis is the bar across the road |
+| `traffic_light` | a point | the only point landmark nuScenes has, and sparse -- one within 120 m of about a fifth of scenes |
+| `stop_line` | **not read** | see below |
+
+**Stop lines are dropped, and the reason is the useful part.** nuScenes
+annotates a stop *zone*, not a stop *bar*: 83% of the polygons are rounder than
+2:1, median aspect 1.5, so there is no direction to extract. Closing them into
+outlines put a third of their segments *along* the road under a label asserting
+they run across it. Evidence that is mislabelled is worse than evidence that is
+absent: an omitted class costs the model what it knew, a mislabelled one teaches
+it something false about every other member of that class.
+
+The general lesson outlives nuScenes: **a class is a claim about what geometry
+constrains**, and an ingest that satisfies the label while violating the claim
+is harder to find than one that simply omits the class, because everything
+downstream keeps working.
+
+## The map is not the detector
+
+The stored map is chunked at survey boundaries; detections are cut out of the
+continuous world by the frustum, whose ends sit at a fixed *range* and so carry
+no information about position along the road. If both sides were cut the same
+way they would share element endpoints at fixed world positions, and a shared
+endpoint is a perfect along-track landmark — a model given only lane geometry
+would localize along the road from an artefact of how the polylines were cut.
+
+That artefact is easy to write and hard to see: chunk once at ingest, hand the
+result to `build_sample` as both arguments, and the sample holds 1088 source
+elements against 1088 map elements while every downstream metric improves. So
+both datasets derive the map with `chunk_for_map` and cut detections from the
+unchunked world; `test_the_map_and_the_detection_source_are_chunked_apart`
+fails if that stops being true.
 
 ## One frame
 
@@ -191,3 +271,20 @@ so a model trained with it cannot be evaluated without it. And *training* on the
 restricted classes, rather than only evaluating that way, separates "cannot see
 it at inference" from "never learned to".
 
+## Cost
+
+A sample costs about 5 ms to build — world, map crop, detections, two warped
+history frames — and the loader is the ceiling, not the model: roughly 64 frames
+per second against the 105 to 430 the GPU could take, depending on token mode. A
+40-epoch arm pays that cost 2.37 million times over 59 200 samples.
+
+`tools/build_cache.py` materialises a split once — 0.88 GiB for `train`,
+memory-mapped so workers share one copy — and `data.cache_dir` makes training
+read it back instead; the arms marked *cached* in [RESULTS.md](RESULTS.md) ran
+that way. Sequence runs ignore it: the closed loop supplies its own prior per
+frame, which cannot be precomputed. Caching and `data.augment` are opposite
+choices, and `cache_dir` wins without warning: a materialised split cannot
+redraw its noise each epoch, so a cached arm augments nothing whatever the
+config asks for.
+
+Run `tools/bench.py` before assuming where the time goes.
