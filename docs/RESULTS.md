@@ -368,6 +368,178 @@ two seeds. The honest reading of a null is that neither knob is worth the
 parameters — B costs +62% and C saves −31% — not that the rank argument was
 proved.
 
+## Compression — quantize, do not prune
+
+*(`tools/paired.py` on the point-token point-to-point arm, test split, 1600
+frames, 2026-01-14. Paired: the same batch through both models, McNemar on the
+discordant frames. No seeds, because these are deterministic transforms of one
+model.)*
+
+| | weights | Δ recall | pose moved (median) | NEES |
+|---|---|---|---|---|
+| **INT8, per channel** | **6.52 → 1.69 MiB (−74%)** | **−0.19 pp** — *not separated* | 7.7 mm | 0.678 → **0.685** |
+| prune, keep 0.75 | −7.7% params | −0.81 pp — **separated** | 21.2 mm | 0.678 → 0.645 |
+| prune, keep 0.50 | −15.4% params | −1.94 pp — **separated** | 45.2 mm | 0.678 → **0.452** |
+
+**Quantization is close to free and pruning is not**, which is the opposite of
+how the two are usually ranked by effort. INT8 removes three quarters of the
+weight bytes with a recall difference inside the noise, a median pose shift of
+7.7 mm against a 250 mm gate, and a **NEES ratio of 0.996** — the covariance is
+untouched. That last number is also the evidence that keeping the solve in fp32
+worked: `quantize()` wraps `nn.Linear` and `solve.py` contains none, so the
+Cholesky and the Gauss-Newton iteration never saw an integer.
+
+### On the teacher, INT8 is not free
+
+*(`tools/paired.py` on the teacher checkpoint — the configuration this file's
+sweeps arrive at: point tokens, point-to-point, `dim` 128, 4 layers, 2 heads of
+64, `rope_bands` pinned at 5, 1.709 M parameters — test split, **all 8 880
+frames**, 2026-01-14.)*
+
+| | teacher fp32 | teacher INT8 |
+|---|---|---|
+| recall @25 cm | 0.9626 | 0.9520 |
+| weights | 6.52 MiB | 1.69 MiB (−74.1%) |
+| NEES median | 0.908 | 0.962 |
+
+**−1.06 pp ± 0.32 — separated**, on 206 discordant frames: 150 lost against 56
+gained. That is five times the difference the table above reports, and the two
+are not directly comparable. The row above measured a *different model* — the
+point-token point-to-point arm, `geometry=relative`, no `rope_bands` pin — over
+1 600 frames, where the paired half-width is 2.4× wider. Both readings are
+honest about their own model; the one that governs deployment is this one,
+because the teacher is what would ship.
+
+**The median hides the tail.** NEES moves 0.908 → 0.962, which reads as
+untouched — but the per-frame **ratio's p99 is 8.35**. On the worst 1% of frames
+the covariance inflates eightfold. Reading "NEES ratio 0.996, the covariance is
+untouched" off the median alone is a median-only reading of a median-only
+statistic. The median is still right; it is just not the whole claim.
+
+**Where the pose goes.** Median 32.2 mm, p99 161.4 mm, against a 250 mm gate —
+so the 150 frames INT8 loses are not frames it ruins, they are frames that were
+already sitting near the threshold. Nothing is catastrophically wrong; the gate
+is simply close enough that a 32 mm jitter crosses it a hundred and fifty times.
+
+**Priced against the speed it buys**, INT8 costs 1.06 pp of recall for at most
+1.17× end-to-end, on a frame that `tools/solve_cost.py` measures as 85% solve.
+So the reason to quantize is the 74% of weight bytes, not the latency.
+
+### And through the filter it costs 2 mm
+
+*(`tools/run_sequence.py --quantize`, same 120 scenes, same protocol as M4.)*
+
+| | open-loop recall | closed loop `trans` | `long` | `lat` | `yaw` |
+|---|---|---|---|---|---|
+| teacher fp32 | 0.9626 | **0.091** | 0.060 | 0.069 | 0.128° |
+| teacher INT8 | 0.9520 | **0.093** | 0.062 | 0.069 | 0.129° |
+
+No scene diverged, 99.9% of frames accepted, and the longest refusal run was
+*shorter* than fp32's — 1 frame against 2. **A cost that is separated and real
+open loop is 2 mm on 91 mm once a filter integrates it**, and that gap is the
+most useful thing on this page about how to read a compression table.
+
+**Recall is a threshold metric and a filter is not.** INT8 moves the pose by a
+median of 32.2 mm against a 250 mm gate. A frame sitting at 249 mm that moves to
+251 mm counts as a whole frame lost, and 150 frames did exactly that — but it is
+2 mm worse, and 2 mm is what the filter sees. The open-loop number is not wrong;
+it answers "how many frames cross a line", which is not the question a vehicle
+asks.
+
+**What the widened tail did, and what is not measured.** The worry this table
+raised was the per-frame NEES ratio's p99 of 8.35: a covariance eightfold wider
+on the worst 1% of frames. Integrated over a scene it cost nothing, which is
+consistent with the inflation landing on the frames INT8 actually damaged — a
+covariance that grows where the error grows is a filter being told to trust
+those frames less, which is correct. **That correlation is the plausible reading
+and it is not measured here.** The alternative, that the inflation is harmless
+because the damage is small either way, fits the same evidence. What is measured
+is the 2 mm.
+
+**So INT8 ships.** 74% of the weight bytes for 2 mm of closed-loop error is the
+best trade in this section, and it only looks that way because the loop was
+measured. On the open-loop table alone the honest reading was "a separated
+1.06 pp regression", and that would have been a defensible reason to reject it.
+
+**Before fine-tuning, pruning damages calibration faster than accuracy.** At
+keep 0.50 recall falls 2% while NEES falls from 0.678 to 0.452 — a third of the
+way to useless, and *away* from the 0.789 target rather than toward it. A table
+reporting recall alone would have called that a cheap 15% saving.
+
+**After fine-tuning, both levels recover completely.** Ten epochs through
+`train.init_from`, measured on the test split:
+
+| | params | recall @25 cm | NEES |
+|---|---|---|---|
+| `p2p` baseline | 1.71 M | 0.980 | 0.681 |
+| keep 0.75 — no tune | 1.58 M | −0.81 pp | 0.651 |
+| **`prune_keep75_finetuned`** | 1.58 M | **0.980** | **0.799** |
+| keep 0.50 — no tune | 1.45 M | −1.94 pp | 0.452 |
+| **`prune_keep50_finetuned`** | 1.45 M | **0.980** | **0.627** |
+
+Recall returns to baseline exactly at both levels, including the heavy prune
+that had lost two points, and most of the calibration damage reverses with it.
+
+**So the intermediate state is not the result.** `tools/prune.py`'s own
+docstring says why: *"the point of the cycle is what the fine-tune recovers,
+and a table that only shows the end state cannot say whether the pruning
+hurt."* The reverse error is just as easy — reporting the state *before* the
+recovery and calling it the cost.
+
+The honest verdict is narrower than either. **Pruning is free in accuracy once
+fine-tuned, and still buys nothing measurable**: no latency, since the model is
+launch-bound; no peak memory, since the attention scores dominate and the
+feed-forward does not; and 15% of parameters on a model whose weights are
+6.5 MB against roughly 78 MB of activations. It is not harmful. There is simply
+no reason to want it here, which leaves **TensorRT as the only compression that
+pays.**
+
+**And pruning does not buy what it is usually bought for.** Halving the
+feed-forward hidden width left peak memory at 7.04 GiB against roughly 7.09
+unpruned: the dominant tensors are the attention scores, not the feed-forward.
+It does not reduce latency either, since `tools/cost.py` puts this model at
+launch-bound at batch 1 — 16x the parameters moved latency 2%, while halving
+*depth* moved it 29%.
+
+> **For deployment: quantize the trunk and matcher to INT8, leave the solve in
+> fp32, and reach for depth rather than pruning if more is needed.**
+
+
+### Pruning the teacher: the gain was the schedule, not the pruning
+
+Pruned and fine-tuned for ten epochs, the teacher comes back **better** — and the
+more aggressive prune comes back better still, which pruning does not do. What
+the two arms share is not the pruning. It is ten further epochs from a
+checkpoint whose best epoch was 19, under a **fresh warmup-and-cosine
+schedule**. A learning-rate restart is a known way off a plateau, and the run
+had early-stopped at 31 after twelve epochs of no improvement.
+
+So the comparison needs an arm that restarts the schedule and prunes nothing:
+
+| arm | params removed | Δ recall vs the teacher, paired over 8 880 frames |
+|---|---|---|
+| **fine-tuned, not pruned** | **0%** | **+0.91 pp ± 0.33 — separated** |
+| pruned to keep 0.75, fine-tuned | 7.7% | +0.72 pp ± 0.34 — separated |
+| pruned to keep 0.50, fine-tuned | 15.4% | +1.10 pp ± 0.32 — separated |
+
+**All three gains are the restart.** Both pruned arms land within 0.2 pp of the
+arm that pruned nothing, against a half-width of 0.33 — so pruning's own
+contribution is not separable from zero in either direction. Read without the
+control, this table says "pruning improves the model by up to 1.1 pp, and more
+pruning is better", which is false and would have been easy to publish.
+
+What survives is worth having, and it is a different claim: **structural
+pruning here is free rather than profitable.** Fifteen percent of the
+parameters can go at no measurable cost to recall, and the calibration moves
+with the fine-tune rather than with the pruning — NEES 0.908 to 0.861 for the
+control against 0.883 at keep 0.50. If the reason to prune is a memory budget,
+take it. If the reason is accuracy, fine-tune and keep the weights.
+
+The second lesson is about this project's own method. `aug_on_*` cost six
+40-epoch arms for want of a matched control, and that was written down as a
+cautionary case hours before this table produced the identical trap. Writing the
+lesson down is not the same as applying it.
+
 ## `rope_bands` — an interior optimum at 5, and the wavelength argument rescued
 
 *(Three cells, `head_dim` 64, one recipe — same epochs, same `grad_clip`, same

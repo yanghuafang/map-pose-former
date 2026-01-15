@@ -119,6 +119,23 @@ map elements metres apart, or in a surface that re-associates at every
 hypothesis, which is what the classical pipeline does and what costs `G` times
 the matching.
 
+## The experiments, in order
+
+M3's two come first because they cost nothing: both run against checkpoints
+that already exist, with no training.
+
+| # | question | arms | decides |
+|---|---|---|---|
+| 0 | ~~how large is seed variance?~~ | **answered at six seeds, one config**: longitudinal CV 17.7% against lateral 0.67% and recall 0.13% — the variance is almost entirely along-track | the error bar every row below is read against |
+| 1 | ~~does a point-to-line residual give the right covariance *shape*?~~ | **answered, and against the residual it was named for**: point-to-*point* is the calibrated one at point resolution — NEES 0.68–0.76 against line's 0.04–0.20, 3 seeds an arm, no overlap. `tools/refcov.py` is the instrument | whether the covariance can be honest at all — it can |
+| 2 | does assignment spread catch the tail? | detector AUC on the 39 known-bad frames | ambiguity |
+| 3 | ~~do pooled element tokens cost closed loop?~~ | **answered both ways**: point beats element by 12.7 points of recall open loop, 3 seeds each, and the point-token teacher closes the loop at 0.091 m | whether 64× cheaper attention is worth buying — it is not |
+| 4 | ~~how much equivariance is worth having?~~ | **answered: 9.2 pp at 7.6 sd.** `rope` 0.9280 against `absolute` 0.8357, 3 seeds each, one shared configuration | the equivariance claim — **load-bearing, not decorative** |
+| 5 | ~~how shallow can it go?~~ | **not below 4: two layers costs 9.8 pp at 18 sd** | depth — and capacity, however bought, wrecks the line residual's covariance tenfold |
+| 6 | ~~what does point-to-point's tail cost in closed loop?~~ | **nothing it cannot afford.** 99.9% of frames accepted, longest refusal run 2 frames, no scene diverged; the 0.1% refused were refused on `mass` — too little map in view — not on a confidently-wrong pose | the calibration win **survives M4**, and is what produces the 2.98x |
+| 7 | ~~does INT8 survive the loop?~~ | **it costs 2 mm.** 0.091 m fp32 against 0.093 m INT8, no divergence, 99.9% accepted, refusal runs *shorter* than fp32's | a separated −1.06 pp open loop is 2 mm on 91 mm closed. **Recall is a threshold metric and a filter is not** — quantize |
+| 8 | what does the history buy? | with and without history, 3 seeds a side — a run of its own, since dropping it changes the input shape | whether temporal fusion earns its 3× sample cost |
+
 ## The bar for `main`
 
 A change lands when its effect exceeds the seed variance M1 measures, on the
