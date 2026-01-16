@@ -119,6 +119,202 @@ map elements metres apart, or in a surface that re-associates at every
 hypothesis, which is what the classical pipeline does and what costs `G` times
 the matching.
 
+## How the model is sized
+
+Sizing usually trades parameters against latency. **At batch 1 that trade
+barely exists**: `dim` 64 to `dim` 256 is 15.7× the parameters for +1.6% of
+batch-1 latency (`tools/cost.py`, RTX 2070, synthetic tensors, p50 of 30). At
+batch 64 it is 2.69×, so parameters are free for the milliseconds and not for
+the days — which is why the teacher is sized against training cost. Attention
+over many tokens and kernel-launch overhead dominate, not arithmetic over
+weights.
+
+So **tokens are what cost**.
+
+This table is what each knob is decided by. The right-hand column is the rule;
+the status is what measuring it returned.
+
+| knob | decided by | status |
+|---|---|---|
+| tokens | as few as carry the answer | **measured** — one per *point*, not per element: 95.9% against 83.1% recall, 12.7 pp at 6.8 sd, `RESULTS.md` |
+| residual | whichever axis is worth buying | **measured** — point-to-point, 3 seeds an arm: NEES 0.68-0.76 against line's 0.04-0.20, no overlap; +1.6 pp recall at 2.0 sd; costs a 10-15x larger confidently-wrong tail |
+| `dim` | the smallest that does not lose accuracy; pose precision comes from the point residual path, not from token width | **128 beats 64 by 5.5 pp at 6.3 sd**, and 256 buys −0.70 pp — saturated |
+| layers | swept upward from 1 until accuracy stops improving | **measured — 4, by +9.8 pp at 18 sd over 2.** Also the largest calibration swing found: NEES 1.016 at two layers against 0.081 at four |
+| heads | see below — rank, against what one softmax can hold | **not separated** at 2 seeds a cell; 2×64 kept, `RESULTS.md` |
+| `head_dim` | stated, not derived from head count, so the two sweep apart | **not separated** — 2×32 against 2×64 is 0.38 sd |
+| refinement passes | as few as the anneal needs | **3 IRLS passes.** Swept at eval: no value clearly wins, so the default is the one the anneal was tuned against |
+| **student** | the largest that fits the latency budget on the target device | export works, and the budget is not where it looks: **the solve is 85% of a compiled frame**, so depth is the only lever that moves the clock |
+| **teacher** | grown until accuracy saturates, since its cost is training time only | **`dim` 128, 4 layers, 2 heads of 64, 1.709 M** — every axis measured, and width is the one that saturated |
+
+**Why more than one head, and why not many.** Multi-head attention costs
+nothing in *parameters* at fixed `dim`: `q·k` contracts over `dim` whether it is
+split or not, the concat is a view, and the output projection exists either way.
+It is not free in activations — the score tensor is linear in head count, and at
+point-token resolution that is 1.8 M pairs per layer against 28 k at element
+resolution.
+
+What extra heads buy is extra *attention distributions*. Softmax normalises, so
+one head holds exactly one — and an element here plausibly needs two at once:
+its lateral neighbours, to answer which of four parallel lines it is, and
+along-track structure like stop lines and poles, to answer where along the road
+it is. One softmax must split its mass between them.
+
+The limit in the other direction is rank. A head's score matrix is rank at most
+`head_dim`, so heads can be too narrow rather than too few. At `dim` 128,
+deriving `head_dim` as `dim // heads` would give 64 at 2 heads and 32 at 4 —
+which is why it is stated instead.
+
+**A narrow head is not a slow one.** Swept over 1 344 point tokens, 4 heads at
+`head_dim` 32 is the *fastest* of the three — p50 7.632 ms, against 7.972 at
+2×64 and 8.444 at 1×128. At batch 1 this model is launch-bound, so a matmul
+saving never reaches the wall clock, and "32 is too small to keep a tensor core
+fed" is an argument about arithmetic that this regime does not run on.
+
+The accuracy half is no better supported: the same sweep gave 0.336, 0.366 and
+0.247 for 4, 2 and 1 heads — non-monotonic, spanning 48% of the smallest value,
+one seed each. That measured seed noise, not head count.
+
+So **the argument for 2 heads is weak, and the measurement is what settles it**
+— but only because the two questions are stated apart. Deriving `head_dim` as
+`dim // heads` makes a head-count sweep move the per-head rank cap with it, and
+deriving `rope_bands` as `head_dim // 6` moves positional bandwidth too; both
+are stated independently so a sweep asks one question. Measured at two seeds a
+cell, 4×64 is not separated from 2×64 (1.03 sd) and 2×32 is not separated
+either (0.38 sd). 2×64 is kept because the registration said in advance that a
+null means neither knob is worth the parameters — even though 2×32 is 31%
+cheaper.
+
+Language models use 32 or more heads because they track many relations over
+long contexts. Point tokens carry more relation classes than pooled tokens do —
+within-element point ordering, and temporal-copy identity among the 512 warped
+history points — so the comparison is less unfair at 1 344 tokens than at 168.
+It still did not separate.
+
+**The rank argument does not bind.** Decomposing the ideal score logit gives
+planar proximity rank 3, heading agreement rank 2, and at most 10 realisable
+class pairs — an intrinsic rank of **at most 15**, against a per-head cap of
+64. Extra *heads* add no rank at all, since the cap is per head; what they buy
+is softmax multiplicity, which this data does not measure. 4×64 costs +62%
+parameters and 1.73× the training step for a gap nothing can read, so the
+memory is better spent on `dim`, `layers` and `tokens` — the axes that have
+actually separated.
+
+Sizes: teacher `dim` 128, 4 layers, 2 heads of 64, 1.709 M parameters; student
+the same at 2 layers, 0.914 M. A teacher is worth training only if the gap it
+opens is worth distilling, and distillation is the one compression stage with a
+closed-loop effect: 3 of 3 seeds beat their no-teacher controls and two match
+the teacher's 0.091 m, at three seeds a side and so not yet certified — and the
+student, not the teacher, is what ships.
+
+## What is already measured
+
+Grouped by what each result is *about*, because that decides how far it
+generalises: a fact about the task holds whatever network reads it; a fact
+about one architecture holds only until someone measures another.
+
+**About the task and the data — these hold whatever the network.**
+
+| | |
+|---|---|
+| association must be learned | the first correspondence is drawn under a 4.5 m prior with map points 1.68 m apart; a learned matcher beats a geometric one 4.4× open loop — an aside in `RESULTS.md`, with no arm behind it |
+| along-track is the weak axis | and the evidence that fixes it arrives intermittently, which is why accumulating frames helps |
+| a synthetic observability result need not survive | it did not reproduce on nuScenes |
+
+**About the filter and the system — arithmetic and statistics, no network.**
+
+| | |
+|---|---|
+| closing the loop helps | 2.98× — 0.271 m to 0.091 m, 120 test scenes, 8 880 frames — and it is the only test that separates bias from noise |
+| a gate cannot catch a confidently-wrong frame | neither gate compares the answer against the prior, so widening is the only lever left. `trust` has no head to read and refused nothing; M4's refusals are all on `mass` — 0.1% of frames, longest run 2 frames. Whether widening converts the tail is not yet measured |
+| overlapping history correlates consecutive measurements | a filter treating them as independent is over-confident |
+| NEES/dof is calibrated at 0.789 at three degrees of freedom | not 1.0 — that is the *median* target, where the conventional one is the mean. Both are reported; the median leads because a mean over a heavy tail is not a calibration, and the gap between them is the tail |
+| a calibrated NEES median does not mean a correct covariance | a median of 0.786 against a 0.789 target sat on top of a covariance 20.6× overconfident on the worst 1% of frames — 2.249 m of error against a claimed 0.308 m — while the other 99% ran 0.80×. Report the per-frame ratio's p99 beside the median |
+| a point-to-point Hessian is isotropic in translation | `2·mass·I`, reporting `σ_long/σ_lat` 1.01 on lane lines alone and 1.01 again with eight poles added — the shape it reports is fixed by the weights, not by the landmarks, which is why the covariance has to be scored rather than argued for |
+| distillation is the one compression stage with a closed-loop effect | the distilled student beats the same student trained with no teacher on 3 of 3 seeds — 1.2×, 2.1×, 6.2× — and 2 of 3 match the teacher's 0.091 m at 53% of the parameters (0.914 M against 1.709 M). Open loop the gap is +2.70 pp at t = 0.86 and the paired t is 1.90 against a critical 4.303: large, consistent in sign, and not certified at three seeds a side |
+
+**About one architecture — measured at 1 344 point tokens, four layers, `dim`
+128.** Each is a measurement on one configuration, not a law. They say why the
+design does not take the obvious branch at each point; any is re-openable by a
+measurement on another.
+
+| | |
+|---|---|
+| pooling points into elements | lost open loop — 83.1% recall against point tokens' 95.9%, 12.7 pp at 6.8 pooled seed sd, three seeds a side, `RESULTS.md` — and 64× cheaper attention did not buy it back; the closed loop was only ever run with point tokens, where it reaches 0.091 m |
+| biasing attention by inter-point distance | 2.5% accuracy for 2.4× the step time, from a 454 MB score-sized tensor per pass |
+| a second refinement pass | trained with one, one wins outright: 0.221 against 0.336, ANEES 4.783 to 1.820 |
+| conditioning the trunk on the prior's width | reversed sign between two training ranges — a correlation, not a cue |
+| feeding pose disagreement to the calibration heads | no accuracy change, and training on the gap destroyed the gap's diagnostic value |
+| collapsing to a single head | accuracy did not separate 1, 2 and 4; latency did, over 1 344 tokens, and favoured 4 |
+| pruning channels or heads | 35% of weights for 0% of latency; heads 3.5%, the same as the weight buys |
+
+**The deployment findings are measured on the compiled frame**, because this
+model is *activation-bound* — 14.4 M attention scores a sample (1.8 M pairs per
+layer, 4 layers, 2 heads) against 1.709 M parameters — and a parameter count
+predicts nothing about it. TensorRT fp16 is 13.6× the PyTorch trunk, which
+leaves **the solve at 85% of a compiled frame**: a network made infinitely fast
+would buy 1.17× end to end, and that is INT8's ceiling. INT8 costs 1.06 pp of
+recall open loop and 2 mm closed. Pruning reaches only the feed-forward hidden
+width — keep 0.75 removes 7.7% of the model, not 25%.
+
+## Milestones
+
+**M0 — the harness.** *Done.* Data, geometry, metrics, the filter, the scripts.
+Everything true whatever network you build.
+
+**M1 — how much can one run settle?** *Done.* Six trainings of one
+configuration differing only in `train.seed`, reported as a spread: longitudinal
+CV 17.7% against lateral 0.67% and recall 0.13%. That is the error bar every row
+below is read against, and it ran first because three runs of one model came out
+48% apart, non-monotonically, so a 10% effect was unresolvable and nobody knew
+it.
+
+**M2 — the matcher.** *Done.* Point tokens, rotary relative attention,
+per-point assignment, the least-squares solve. Ablated against pooled element
+tokens and absolute encoding, 3 seeds an arm.
+
+**M3 — the covariance.** *Done.* Curvature in place of a fitted scale, and the
+residual chosen by which one scores calibrated rather than by which one looks
+anisotropic. Ambiguity is read from the assignment, not from the local minima
+of a fixed-assignment surface — those are numerical, and measured to be so.
+
+**M4 — closed loop.** The filter, with ambiguity widening the covariance rather
+than gating the frame. **Done: 0.271 m open loop to 0.091 m closed, 2.98x, no
+scene diverged** — 120 generated test scenes, 8 880 frames,
+`configs/synth_base.yaml`. The gain arrives *because* the covariance is
+honest — an accurate pose with a dishonest one measures 0.188 m here and looks
+fine in every open-loop table.
+
+**M5 — real data, in two halves.** *Open.* The map is already real and cached:
+the nuScenes expansion gives surveyed lane dividers, road boundaries, crossings
+and 307 traffic-light poses in Boston alone, and `data/nuscenes.py` reads it
+without importing the devkit. What is still generated is *perception*.
+
+*First half* — the shipped configuration on that map, split geographically so no
+location is shared between training and test, with detections still cut from the
+map and corrupted. No new code: the cache is built and `configs/nuscenes.yaml`
+exists. What it buys is the first result on real road geometry.
+
+*Second half* — detections from a real mapper. The class mapping already follows
+the online-mapping convention (MapTR, StreamMapNet) so a detector drops in
+without a translation layer, and `data/detections.py` specifies the file it must
+write. The detector runs offline in its own environment, because its
+dependencies cap at Python 3.10 and torch 2.0 where this project runs 3.12.
+That boundary is deliberate.
+
+**M6 — distillation.** *Done, and not where it was expected.* Six seeds a side:
+recall gains 1.58 points and does not separate (paired t = 1.46), while NEES
+moves 0.497 to 0.691 against an honest 0.789 and does (t = 2.98, six of six
+seeds). The teacher transfers **calibration**, not accuracy — which is what the
+filter charges for, and why the two arms differ by 15 mm closed loop and by
+nothing measurable frame by frame. The failure rate is still unresolved: 5 of 6
+distilled runs reach the good basin against 3 of 6 untaught, which needs about
+twenty seeds a side rather than six.
+
+**M7 — deployment.** *Measured in part.* TensorRT on the desktop; Core ML on
+Apple silicon, where int8 compute is Neural Engine only and 4-bit is weight-only
+compression. Pruning and quantization are measured on the compiled frame, where
+the solve is most of it.
+
 ## The experiments, in order
 
 M3's two come first because they cost nothing: both run against checkpoints

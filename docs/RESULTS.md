@@ -368,6 +368,175 @@ two seeds. The honest reading of a null is that neither knob is worth the
 parameters — B costs +62% and C saves −31% — not that the rank argument was
 proved.
 
+## TensorRT, and why the solve is now the whole problem
+
+*(RTX 2070, batch 1. `tools/export.py --trunk-only` writes the ONNX,
+`mapposeformer/tensorrt.py` builds the engine, and `tools/trt_latency.py`
+times it — p50 of 300 after 50 warmup, the same protocol `tools/latency.py`
+uses for PyTorch, so the speedup is a subtraction rather than a claim.)*
+
+**The model cannot be exported whole, and not for want of trying.**
+`torch.onnx.export` fails outright inside the solve:
+
+> `No ONNX function found for aten._linalg_solve_ex`
+
+There is no operator to lower a linear solve to, in any opset. So deployment is
+split by necessity rather than by preference: **trunk and matcher on the
+accelerator, solve on the host.** What crosses the boundary is the assignment,
+768 x 576 at point resolution — 1.7 MB a frame, and the real price of the split.
+
+| | ms | note |
+|---|---|---|
+| PyTorch, whole model | 20.62 | `tools/pareto.py` |
+| — the solve within it | 6.17 | `tools/solve_cost.py`, synchronised |
+| — so the trunk in PyTorch | ~14.45 | by difference |
+| **TensorRT, trunk only** | **2.69** | 372 frames/s, engine 8.0 MB |
+| **trunk + host solve** | **8.86** | **2.3x end to end** |
+
+**FP16 takes it further, and settles INT8 without building it.**
+
+| | trunk | + host solve | end to end |
+|---|---|---|---|
+| PyTorch | ~14.45 ms | 20.62 ms | 1.0x |
+| TensorRT fp32 | 2.69 ms | 8.86 ms | 2.3x |
+| **TensorRT fp16** | **1.06 ms** (942 fps) | **7.23 ms** | **2.85x** |
+| *a trunk that cost nothing* | 0 | 6.17 ms | 3.34x |
+
+FP16 is 2.5x the fp32 engine and **13.6x the PyTorch trunk**, on a Turing card
+with real half-precision tensor cores. **So the solve is now 85% of the frame**,
+and a network made infinitely fast would buy only 1.17x more. INT8 can at best
+shave part of 1.06 ms, so it is not worth the `modelopt` Q/DQ work — the
+simulated-INT8 accuracy result stands on its own and the speed question is
+answered by arithmetic rather than by another engine.
+
+**Verified against PyTorch, and it is not exact.** (Engine and eager model run
+on the same real inputs, in the export's own key order.)
+
+| output | max abs err | mean abs err | **argmax agreement** |
+|---|---|---|---|
+| assignment, 768 x 576 | 1.1e-01 (11.8% of range) | 4.8e-06 | **99.35%** |
+| scores | 3.77 (0.04% of range) | 2.9e-02 | **99.61%** |
+
+**0.65% of detection points choose a different map correspondence** — about 5
+of 768 per frame. The mean error is negligible and the tail is not, which is
+what half precision does to a saturated softmax, and precisely why
+`matcher.py` already forces fp32 for that einsum under bf16 autocast.
+
+Whether five wrong correspondences a frame matter is **not yet measured**. The
+solve is robust — iteratively reweighted least squares (IRLS) is built to
+discard bad correspondences — so they may be absorbed entirely. But this
+project has been caught twice by changes that held recall and moved the
+covariance, so the claim stops here:
+**fp16 is 13.6x faster at 99.35% assignment agreement, and the downstream cost
+of that 0.65% is unknown.**
+
+The latency numbers were re-taken on real inputs, because the harness had been
+feeding zeros: it filled a tensor from the sample only when the tensor's *name*
+matched a sample key, and the ONNX exporter names every input `args_N`, so it
+matched nothing and padded everything. It now maps positionally, in the
+export's own key order, and refuses outright rather than padding if the counts
+disagree.
+
+| engine | on zeros | on real inputs |
+|---|---|---|
+| fp32 | 2.689 ms | **2.673 ms** |
+| fp16 | 1.061 ms | **1.049 ms** (953 fps) |
+
+Within 1%, so the conclusions above stand unchanged — which is the answer that
+had to be *measured* rather than assumed, since "dense kernels do not care
+about values" is a plausible argument and this project has been wrong with
+plausible arguments before.
+
+**And it inverts the problem.** The solve was 28% of a PyTorch frame; compiled
+to fp32 it is **70%** of a much shorter one, and at fp16 **85%** — the share
+climbs precisely because the solve is the part that does not compile. Every
+remaining optimisation on this path is worth at most the 15% that is left at
+fp16, against a ceiling of about 3.4x, and fp16 already collects 2.85x of it.
+Compressing the network further is close to pointless; the work that remains is
+the solve.
+
+That reframes the Raspberry Pi question. It is not *"can the network be made
+small enough"* — TensorRT already answers that, and INT8 might shave the 2.69 ms
+further. It is **"can six milliseconds of damped Gauss-Newton with a Cholesky
+factorisation run on the target, per frame, with no GPU to fall back to."**
+
+## The frontier, with one column that must not be read as deployment
+
+*(`tools/pareto.py`, test split, batch-1 latency on the RTX 2070, p50/p99 over
+200 iterations, every row measured in one process on one machine.)*
+
+| | params | trans | NEES | recall @25cm | p50 | p99 |
+|---|---|---|---|---|---|---|
+| **p2p** | 1.71 M | 0.274 | **0.681** | **98.0%** | 20.62 | 37.93 |
+| p2p+int8 | 1.71 M | 0.282 | 0.682 | 98.0% | *34.27* | *84.76* |
+| keep 0.75 | 1.58 M | 0.275 | 0.651 | 97.5% | 20.69 | 45.26 |
+| keep 0.75 + int8 | 1.58 M | 0.276 | 0.640 | 97.5% | *34.98* | *64.85* |
+| keep 0.50 | 1.45 M | 0.319 | **0.473** | 95.7% | 20.34 | 48.50 |
+| keep 0.50 + int8 | 1.45 M | 0.321 | 0.471 | 95.7% | *34.13* | *77.28* |
+| line | 1.71 M | **0.251** | **0.198** | 94.4% | 20.74 | 37.71 |
+| **L2** | **0.91 M** | 0.390 | 0.989 | 86.6% | **14.25** | **27.13** |
+
+**The `+int8` latencies are italicised because they are not deployment
+numbers.** `quantize.py` implements *simulated* quantization: it rounds a
+tensor and converts it straight back, which adds arithmetic and removes none.
+That the rows come out 66% slower measures the simulation, not INT8.
+`tensorrt.py` exists precisely for this and says so in its own docstring — only
+real integer kernels can answer it. **So the INT8 claim this project can make
+today is about accuracy, where it is genuinely free — NEES 0.681 to 0.682,
+recall unchanged — and nothing at all about speed.**
+
+The columns that *are* deployment numbers say three things.
+
+**Pruning buys nothing measurable.** keeping 0.50 removes 15% of the parameters
+and lands at 20.34 ms against the baseline's 20.62 — inside the noise — while
+costing 2.3 points of recall and a third of the calibration. It does not reduce
+peak memory either (7.04 GiB against 7.09). On a launch-bound model there is
+nothing for it to save.
+
+**Depth is the only row that moves the clock.** `L2` is 14.25 ms against 20.62,
+a **31% reduction**, and the only configuration in the table that is genuinely
+cheaper. It costs 11.4 points of recall, which is a real price — but it is a
+price paid for something, which pruning is not.
+
+**And the residual verdict is visible in one row.** `line` has the *best*
+translation RMSE in the table at 0.251 and the *worst* calibration at NEES
+0.198, with 3.6 points less recall than `p2p`. A frontier ranked on RMSE alone
+would have chosen it.
+
+## What the solve costs, and the ceiling it puts on compression
+
+*(`tools/solve_cost.py`, the point-token point-to-point arm, batch 1 on the
+RTX 2070, p50 of 20, CUDA-synchronised. Batch 1 because that is the deployment
+case.)*
+
+| | ms | share |
+|---|---|---|
+| full forward | **21.92** | 100% |
+| `solve_pose_directional` | 5.42 | 24.7% |
+| `curvature_covariance` | 0.44 | 2.0% |
+| `measurement_information` | 0.30 | 1.4% |
+| **the solve, all of it** | **6.17** | **28.1%** |
+| network — trunk and matcher | 15.75 | 71.9% |
+
+**The solve is 28% of an eager frame and none of it compresses.** It is a damped
+Gauss-Newton iteration with a Cholesky factorisation: no weights to quantize,
+nothing an NPU accelerates, and unchanged when the network shrinks. So the
+ceiling on every compression result above is **about 3.5x** — that is what
+"compressing the trunk and matcher to nothing" buys, and INT8 plus pruning
+together get nowhere near it.
+
+The ceiling is quoted loosely because it comes out differently under two
+protocols: 3.55x against this tool's 21.92 ms eager frame, 3.34x against the
+20.62 ms one the latency table reports. They measure the same thing 6% apart,
+which is the honest precision of a batch-1 wall-clock number and smaller than
+any decision resting on it.
+
+This is the number that decides whether a Raspberry Pi is plausible, and it
+reframes the target: the work is not making the network smaller, it is either
+making the *solve* cheaper or accepting 6 ms of irreducible host-side
+arithmetic per frame. On a Pi both sides get slower, and the solve does not
+have a GPU to fall back to.
+
 ## Compression — quantize, do not prune
 
 *(`tools/paired.py` on the point-token point-to-point arm, test split, 1600
