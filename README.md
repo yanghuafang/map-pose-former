@@ -141,6 +141,22 @@ band is unresolvable, so comparisons here run three seeds a side.
 other comparison. `docs/ROADMAP.md` argues each design choice and names the
 measurement that settled it.
 
+## What is here
+
+| | |
+|---|---|
+| `mapposeformer/data/` | synthetic worlds, nuScenes, the detector contract |
+| `mapposeformer/model/` | the encoders, the attention, the two-stage assignment |
+| `mapposeformer/solve.py` | the pose and its covariance — no parameters |
+| `mapposeformer/losses.py` | what the assignment is trained on, and why the pose loss is not enough |
+| `mapposeformer/engine/` | train, evaluate, and run a sequence closed loop |
+| `mapposeformer/geometry.py` | SE(2) compose, inverse, relative, transform |
+| `mapposeformer/metrics.py` | pose error, and whether the covariance is honest |
+| `mapposeformer/filter.py` | the SE(2) Kalman filter corrections are fed back through |
+| `mapposeformer/config.py` | YAML plus `section.field=value` overrides |
+| `scripts/` | environment, CI, and running things on a remote GPU box |
+| `tools/bench.py` | how fast the data arrives, which bounds the step |
+
 ## Getting started
 
 ```bash

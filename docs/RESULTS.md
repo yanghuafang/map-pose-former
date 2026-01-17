@@ -36,6 +36,48 @@ and concluded the same configuration had reported two different numbers. Every
 multi-seed figure in this file is labelled, because a band is the difference
 between a result and an anecdote.
 
+## Which of these numbers can be trusted
+
+**Accuracy survives and calibration is the fragile half.** Numerics reach the
+pose only through the assignment: `eval.py` runs in fp32 and the solve is
+deterministic once the correspondences are fixed. A precision change costs
+whatever it costs the assignment — fp16 export moves 0.65% of points onto a
+different correspondence, and the downstream price of that is left open below
+rather than assumed to be zero. The covariance is where the care goes — its
+divisor, its floor and the filter's use of it each carry a test that states the
+invariant rather than the number.
+
+## How calibration is reported, and why 0.789
+
+Every calibration row here leads with a **median** NEES per degree of freedom —
+normalised estimation error squared, the pose error measured in units of the
+covariance the model reported — against a target of **0.789**, and that is not
+the conventional choice. The convention — Bar-Shalom, Li and Kirubarajan, and
+the practice every filtering toolkit inherits from it — averages NEES and tests
+it against the degrees of freedom, so the normalised target is **1.0**. Both
+numbers appear in every report this project produces: `anees_median` against
+0.789 and `anees_mean` against 1.0.
+
+The arithmetic first. A calibrated NEES is chi-square distributed and the
+chi-square is right-skewed: at three degrees of freedom its mean is 3 and its
+median 2.366. Per dof that is 1.0 and 0.789. Judging a median against 1.0 calls
+a textbook-calibrated model pessimistic by 21%, which is a mistake worth
+naming because it is easy to make.
+
+The median leads because **a mean over this error distribution is not a
+calibration**. Association failures put a small fraction of frames arbitrarily
+far out and the mean follows them. This file contains the worked example: a
+model whose mean ANEES reads 1.7–3.0 against a target of 1.0 while its median
+frame is honest, because 0.30–0.45% of frames carry the entire statistic. The
+two diagnoses have opposite repairs, and rescaling to fix the mean would wreck
+the frames that were already right. That an average NEES is dominated by its
+large errors is a known objection to the convention rather than a discovery
+here.
+
+So read the pair, not either alone — **the gap between them is the tail**, and
+a reader wanting the conventional statistic should take `anees_mean` against
+1.0 and treat the median as its robust companion.
+
 ## The number to beat
 
 The prior is drawn, so the baseline is exact rather than estimated: predict a
