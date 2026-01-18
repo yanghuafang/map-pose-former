@@ -811,6 +811,54 @@ arms, so that failure is the two-layer optimisation problem rather than anything
 the teacher could fix. Distinguishing a rate near one-half needs about twenty
 seeds a side, not six, and this project does not have a claim about it.
 
+### The compression comparison, measured
+
+*(Everything below is the test split, 8 880 frames. Open-loop deltas are paired
+McNemar against the row's own baseline; closed loop is `tools/run_sequence.py`
+over 120 sequences. Pruned rows are fine-tuned 10 epochs, and each side carries
+the control that fine-tunes without pruning.)*
+
+| | params | weights | Δ recall, paired | closed loop |
+|---|---|---|---|---|
+| **teacher** | 1.709 M | 6.52 MiB | — (96.3%) | **0.091 m** |
+| teacher, fine-tuned | 1.709 M | 6.52 MiB | +0.91 pp — separated | 0.090 m |
+| teacher, pruned 7.7% | 1.58 M | 6.0 MiB | +0.72 pp — separated | 0.092 m |
+| teacher, pruned 15.4% | 1.45 M | 5.5 MiB | +1.10 pp — separated | 0.092 m |
+| teacher, INT8 | 1.709 M | **1.69 MiB** | −1.06 pp — separated | 0.093 m |
+| **distilled student** | **0.914 M** | 3.49 MiB | — (96.7%) | **0.091 m** |
+| student, fine-tuned | 0.914 M | 3.49 MiB | +0.35 pp — separated | — |
+| student, pruned 7.2% | 0.85 M | 3.2 MiB | +0.25 pp — not separated | — |
+| student, pruned 14.4% | 0.78 M | 3.0 MiB | +0.15 pp — not separated | — |
+| student, INT8 | 0.914 M | **0.90 MiB** | −0.23 pp — separated | 0.092 m |
+| student, **no teacher** | 0.914 M | 3.49 MiB | −1.54 pp | **0.106 m** |
+
+**Every row lands within 2 mm of 0.091 m except the one that had no teacher.**
+That is the whole table in a sentence. The registered prediction — no variant
+moving the closed loop by more than about 5 mm — holds for every compression
+step and fails only where the comparison was never about compression.
+
+**Pruning contributes nothing, at either size.** On both models the arm that
+restarts the schedule and prunes nothing gains as much or more than the arms
+that prune: +0.91 against +0.72 and +1.10 on the teacher, +0.35 against +0.25
+and +0.15 on the student, and on the student only the control separates. What a
+prune-and-fine-tune buys is the learning-rate restart. Take pruning for a memory
+budget — 15% of the parameters leave at no measurable cost — and never for
+accuracy.
+
+**INT8 is the only step that pays, and it pays in bytes.** 74% of the weights on
+both models, for 2 mm on the teacher and 1 mm on the student. The student
+quantizes better than the teacher by every measure — −0.23 pp against −1.06,
+9.8 mm of pose movement against 32.2, a NEES-ratio tail of 2.10 against 8.35 —
+and the untaught student behaves the same way (−0.21 pp), so that robustness is
+**depth, not distillation**: two layers accumulate less quantization error than
+four.
+
+**And none of it buys speed.** Compiled to fp16 the solve is 85% of the frame,
+so the ceiling on compressing the network is 1.17x end to end. The student's
+half-size trunk is about 4% of a frame. These rows are a memory table, not a
+latency table, and reading them as a Pareto frontier would be reading them
+wrong.
+
 ### Registered before the compression comparison is measured
 
 The distilled students and their no-teacher controls are still training, and the
