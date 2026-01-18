@@ -716,6 +716,37 @@ launch-bound at batch 1 — 16x the parameters moved latency 2%, while halving
 > fp32, and reach for depth rather than pruning if more is needed.**
 
 
+### Registered before the compression comparison is measured
+
+The distilled students and their no-teacher controls are still training, and the
+full comparison — teacher, distilled student, student trained alone, pruned,
+quantized — is not yet takeable. Writing the expectation down first is what
+makes it a result rather than a story told afterwards, and this file has one
+prediction that was confirmed and one that had to be withdrawn.
+
+**The prediction.** Every compression variant lands within about 5 mm of the
+teacher's 0.091 m closed loop, and none moves end-to-end latency by more than
+about 10%. The distilled student beats its no-teacher control by less than that
+control's own seed band, which two seeds put at 5.8 pp — so distillation does
+not separate at three seeds a side.
+
+**Why.** The solve is 85% of the compiled frame, so the network's whole share is
+15% and the largest structural change available — two layers instead of four,
+-29% on the network — is about 4% end-to-end. Pruning reaches only the
+feed-forward width and moves latency by roughly nothing; INT8 is capped at
+1.17x by the same arithmetic. And the filter has already been shown to absorb a
+separated open-loop regression: INT8's -1.06 pp arrived as 2 mm.
+
+**What would falsify it.** A distilled student clearing 5.8 pp over its control,
+or any variant moving the closed loop by more than 5 mm. Either would mean the
+network matters more than the latency breakdown says, and the breakdown would be
+the thing to re-examine.
+
+**What it is worth if it holds.** Not a ranking. The useful statement would be
+that compressing this network is free and unnecessary in equal measure, because
+the network is not the bottleneck — which is a deployment conclusion, and a
+more transferable one than knowing which variant won.
+
 ### Pruning the teacher: the gain was the schedule, not the pruning
 
 Pruned and fine-tuned for ten epochs, the teacher comes back **better** — and the
