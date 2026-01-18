@@ -27,6 +27,46 @@ the map stores as an attribute and the detector sees as geometry.
 The gap between red and green is the whole problem. `tools/viz_sample.py` draws
 it for any frame.
 
+## What it achieves
+
+Test split, 8 880 generated frames, seeds disjoint from training. The baseline
+is the point: 0.271 m means nothing until you know it started at 1.611 m. The
+last column scores the covariance rather than the pose — the error measured in
+units of the uncertainty claimed for it, where 0.789 is calibrated, above it
+over-confident and below it cautious.
+
+| | translation | recall @ 25 cm, 0.5° | NEES |
+|---|---|---|---|
+| do nothing — the prior's own error | 1.611 m | 1.3% | — |
+| **this model, one frame at a time** | **0.271 m** | **96.3%** | 0.909 |
+| the same, through the filter | **0.091 m** | — | — |
+
+Closing the loop is worth **2.98x**, with no scene diverged and 99.9% of frames
+accepted — and it is worth that *because* the covariance is honest. A model with
+the same accuracy and a covariance 2.3x too wide scores 0.188 m on the same
+scenes, and looks identical in every open-loop table.
+
+And what it costs to make it small. Same test split, one seed throughout — the
+student rows are seed 0 of the three in [docs/RESULTS.md](docs/RESULTS.md):
+
+| | params | recall | closed loop | weights |
+|---|---|---|---|---|
+| teacher | 1.709 M | 96.3% | 0.091 m | 6.52 MiB |
+| distilled student | 0.914 M | 96.7% | **0.091 m** | 3.5 MiB |
+| the same student, no teacher | 0.914 M | 95.1% | 0.106 m | 3.5 MiB |
+| teacher, pruned 15%, fine-tuned | 1.45 M | 97.4% | not measured | 5.5 MiB |
+| teacher, INT8 | 1.709 M | 95.2% | 0.093 m | **1.69 MiB** |
+
+**A distilled student matches the teacher at 53% of the parameters.** Everything
+else lands within 2 mm of it, which is the real finding: compiled to TensorRT
+fp16 the *solve* is 85% of the frame (RTX 2070, batch 1), so compressing the
+network is capped at 1.17x however well it is done. Compress for memory, not
+for speed.
+
+The pruned arm's +1.1 points is the learning-rate restart, not the pruning — a
+fine-tuned control that prunes nothing gains +0.91 pp on the same paired test
+split, against a half-width of 0.33. Pruning here is free, not profitable.
+
 ## What goes in, what comes out
 
 One frame at a time. Every tensor is fixed-shape and padded, and no absolute
@@ -124,6 +164,27 @@ exactly, and makes a wrong pose a *visible* wrong assignment.
 shapes at each stage, the Procrustes derivation, and why the robust weight has
 to be annealed rather than switched on. [docs/ROADMAP.md](docs/ROADMAP.md)
 argues for each choice and says what it still has to prove.
+
+## Three ideas worth taking
+
+**Compute the pose, do not regress it.** Correspondences determine the
+transform, so the pose head is a zero-parameter weighted Procrustes with a
+damped Gauss-Newton refinement, and all capacity goes to matching.
+
+**Take the covariance from the curvature of the cost you just minimised.**
+Nothing is fitted, so the measured question is whether a free covariance is
+good enough for a filter — and it is: it collects the full 2.98x.
+
+**Recall is a threshold metric and a filter is not.** INT8 costs a
+statistically separated −1.06 points of frame recall and 2 mm of closed-loop
+error — a factor of fifty between what the frame-level metric charges and what
+the vehicle pays. A frame that misses a 250 mm gate by 2 mm scores as a total
+loss while contributing 2 mm. The corollary bites the other way too:
+across six seeds a side, distillation gains 1.58 points of recall and does not
+separate — t = 1.46 — while its NEES moves 0.497 to 0.691 against an honest
+0.789 at t = 2.98, six seeds of six. The teacher transfers calibration, not
+accuracy, and closed loop that is worth 15 mm where the frame-level gap is
+noise. Measure a perception module by what consumes it.
 
 ## Where this is
 

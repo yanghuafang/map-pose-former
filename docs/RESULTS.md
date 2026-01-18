@@ -716,6 +716,101 @@ launch-bound at batch 1 — 16x the parameters moved latency 2%, while halving
 > fp32, and reach for depth rather than pruning if more is needed.**
 
 
+### Distillation, three seeds a side — and the variance is an optimisation failure
+
+*(`tools/run_sequence.py` on the test split, 120 scenes, 8 880 frames;
+open-loop recall from `tools/eval.py`. Three seeds a side, 40 epochs each,
+`mapposeformer/distill.py` — `scripts/run_arms.sh` arms `student_s{0,1,2}`
+against `student_no_teacher_s{0,1,2}`. Measured 2026-01-17.)*
+
+The student is the teacher's configuration at two layers: 0.914 M parameters
+against 1.709 M. `student_no_teacher_*` is the same arm with no teacher, which
+is the only thing that makes the distilled arms readable.
+
+| seed | distilled | no teacher | distilled | no teacher |
+|---|---|---|---|---|
+| | recall | recall | closed loop | closed loop |
+| s0 | 0.967 | 0.951 | **0.091** | 0.106 |
+| s1 | 0.890 | 0.893 | 0.252 | 0.523 |
+| s2 | 0.957 | 0.889 | **0.092** | 0.571 |
+| mean | 0.938 | 0.911 | 0.145 | 0.400 |
+
+**Open loop the gap is +2.70 pp at t = 0.86 — not separated.** Closed loop the
+distilled arm wins on three of three seeds, by 1.2x, 2.1x and 6.2x. The paired
+t is 1.90 against a critical 4.303 at two degrees of freedom, so the effect is
+large, consistent in sign, and **not certified at three seeds**.
+
+**Two of three distilled seeds match the teacher exactly** — 0.091 and 0.092
+against its 0.091 — at 53% of the parameters. The third does not, and the
+reason is visible long before the filter:
+
+| epoch | 9 | 10 | 15 | 20 | 27 |
+|---|---|---|---|---|---|
+| s0 | 0.472 | 0.406 | 0.348 | 0.291 | 0.285 |
+| **s1** | **0.695** | **0.675** | **0.561** | **0.531** | **0.496** |
+| s2 | 0.440 | 0.355 | 0.300 | 0.324 | 0.283 |
+
+**Seed 1 is in a worse basin by epoch 9 and never leaves it.** It is not
+unstable — it descends monotonically — it is simply on a worse trajectory from
+the start, and its no-teacher counterpart does the same thing. So this is the
+initialisation and the data order, not the teacher.
+
+**That is the finding, and it is about depth rather than distillation.** The
+four-layer teacher trained once and converged. The two-layer student reaches the
+good basin on two runs of three, and its untaught control on one of three. Depth
+was bought for accuracy in the depth sweep; it also buys *optimisation
+reliability*, which no open-loop accuracy table shows.
+
+It also changes what the comparison should measure. A mean over three runs, one
+of which failed to converge, is not a description of either arm — the quantity
+that matters is **how often a run reaches the good basin, and whether the
+teacher changes that rate**. Three seeds estimate a rate near one-in-three
+appallingly, so six a side were run; the next section is what they said.
+
+### Six seeds a side: distillation separates on calibration, not accuracy
+
+*(Same protocol as above, six seeds each. `student_s{0..5}` against
+`student_no_teacher_s{0..5}`, 40 epochs, test split, 8 880 frames. Paired by
+seed, because both sides use the same six initialisations.)*
+
+| seed | recall | | NEES | |
+|---|---|---|---|---|
+| | distilled | no teacher | distilled | no teacher |
+| s0 | 0.967 | 0.951 | 0.760 | 0.507 |
+| s1 | 0.890 | 0.893 | 0.455 | 0.452 |
+| s2 | 0.957 | 0.889 | 0.767 | 0.355 |
+| s3 | 0.969 | 0.966 | 0.790 | 0.752 |
+| s4 | 0.902 | 0.891 | 0.599 | 0.285 |
+| s5 | 0.960 | 0.960 | 0.777 | 0.628 |
+| **mean** | **0.941** | **0.925** | **0.691** | **0.497** |
+
+**Recall does not separate, at six seeds as at three.** +1.58 pp, paired
+t = 1.46 against a critical 2.571. The prediction registered before any of this
+was measured said distillation would not separate on recall, and it does not.
+
+**Calibration separates.** +0.195 of NEES, paired t = 2.98, p < 0.05, and six
+of six seeds improve. The mean moves from 0.497 to 0.691 against the honest
+0.789 — the untaught student is badly over-wide, the distilled one is close to
+right.
+
+So the teacher transfers *calibration*, not accuracy. That is the finding, and
+it is not the one a compression table would look for: a student distilled to
+match its teacher's assignment ends up with a covariance that means what it
+says, while the same architecture trained on labels alone does not.
+
+**It also explains the closed loop.** A filter weights each correction by the
+covariance it is handed, so an over-wide one under-weights every correction and
+collects less. That is why the two arms differ by 15 mm through the filter and
+by nothing measurable frame by frame — 0.091 m against 0.106 m at seed 0, where
+open-loop recall differed by 1.6 pp and did not separate.
+
+**What still does not separate is the failure rate.** Three of six untaught runs
+reach the good basin and five of six distilled ones do, which is 5/6 against 3/6
+— a Fisher exact p of about 0.55, nowhere near a result. Seed 1 fails in both
+arms, so that failure is the two-layer optimisation problem rather than anything
+the teacher could fix. Distinguishing a rate near one-half needs about twenty
+seeds a side, not six, and this project does not have a claim about it.
+
 ### Registered before the compression comparison is measured
 
 The distilled students and their no-teacher controls are still training, and the
