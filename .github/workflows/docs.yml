@@ -1,0 +1,50 @@
+# Publish the generated API reference to GitHub Pages.
+#
+# Pages can serve a branch or an artefact, and this takes the artefact. A
+# branch would mean committing 265 files of generated markup, which .gitignore's
+# first rule already rules out -- anything this repository can produce does not
+# belong in it -- and every rebuild would drop an unreadable diff onto the
+# critical path. Built here instead, kept nowhere, so main is the only branch.
+name: docs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push replaces an older build rather than queueing behind it: the
+# output would be overwritten anyway, so waiting for it only delays the site.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+# deploy-pages needs `pages` to publish and `id-token` to prove to Pages that
+# the artefact came from this workflow. Nothing here writes to the repository.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # graphviz is not installed: the Doxyfile leaves HAVE_DOT at its default,
+      # so nothing here draws a graph and the package would only cost time.
+      - run: sudo apt-get update && sudo apt-get install -y doxygen
+
+      # The same script a person runs locally, so the published pages and the
+      # ones built by hand cannot drift.
+      - run: scripts/docs.sh
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/doxygen/html
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
